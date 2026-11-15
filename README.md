@@ -4,6 +4,8 @@ UTF-8 ソースからトークン列と flat AST を **Metal GPU 上で構築す
 
 Bend 内で作成した試作とリサーチを `mizchi/metalic` に切り出した。Bend の checkout や runtime はビルド・実行に不要。
 
+実装して分かったことは [docs/metalic-lessons](docs/metalic-lessons/README.md) に整理した。GPU に戻る境界・資源所有・AST 回収・CPU 対照・自動配置の失敗を、保存済み測定から説明する。`just docs-verify` で資料の数値と参照先を検査できる。
+
 ```sh
 git clone https://github.com/mizchi/metalic.git
 cd metalic

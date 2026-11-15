@@ -8,6 +8,9 @@ test: build
   pnpm check
   pnpm test
 
+docs-verify:
+  pnpm docs:verify
+
 parse file: build
   pnpm parse {{quote(file)}}
 
