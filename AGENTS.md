@@ -38,3 +38,6 @@
 - scheduler の score は native 検証・JSON/IPC・CPU 消費を含む service wall time。自 scheduler の待ち、初回準備、校正と混ぜない。競合履歴と単独履歴を分け、GPU timestamp だけで配置を決めない。
 - prepared handle は immutable replica。予約容量を入力生成より前に検査し、release／close は受理済み処理・GPU completion・CPU 消費まで待つ。worker の失敗を別 backend で隠れて再試行しない。
 - プロファイルは build/MSL・機種・OS・Node・検証設定の fingerprint と TTL を検証する。raw observation を上限内で保存し、seed そのものを再利用キーにしない。複数 writer の同一 profile path はサポートしない。
+- 適性対照は `src/fit-cases.ts`、評価規則は `src/fit.ts`、実機 gate は `just bench-fit`。事前の CPU/GPU ラベルや固定対照の時間を scheduler に入力しない。通常の run で学習し、別 seed の実入力 hash を確認する（全byte固定の hot histogram は明示した例外）。
+- fit の定常率、探索込み regret、API 全時間を別々に報告する。小粒度の加算許容と曖昧な分類を省略しない。失敗した設定も測定記録に残し、基準を緩めて成功扱いにしない。
+- drift 時の再確認は単独／競合で分離する。一観測の外れ値で履歴を置換せず、連続確認で rolling window を更新する。再確認中の一時状態は性能ヒントで、GPU buffer の所有権と結び付けない。

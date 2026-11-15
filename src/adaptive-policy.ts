@@ -2,12 +2,16 @@ import type { AdaptivePolicyConfig, AdaptiveProfiles, AdaptiveEntry, AdaptiveDec
 export const lane=(mode:WorkloadMode):'cpu'|'gpu'=>mode.startsWith('cpu') ? 'cpu' : 'gpu';
 export const policyDefaults:AdaptivePolicyConfig={minSamples:3,window:9,recheckEvery:64,switchMargin:.1};
 const median=(xs:number[])=> { const sorted=[...xs].sort((a,b)=>a-b),m=Math.floor(sorted.length/2); return sorted.length%2 ? sorted[m] : (sorted[m-1]+sorted[m])/2; };
+type Context='isolated'|'contended';
+interface Probe { mode:WorkloadMode; remaining:number; thresholdUs:number }
 
 /** Pure placement state: no processes, files, clocks or GPU resources. */
 export class AdaptivePolicy {
   readonly config:AdaptivePolicyConfig;
   private profiles:AdaptiveProfiles;
   private pending=new Map<string,number>();
+  private anchors=new Map<string,Partial<Record<WorkloadMode,Partial<Record<Context,number>>>>>();
+  private probes=new Map<string,Partial<Record<Context,Probe>>>();
   private clock=0;
   constructor(config:Partial<AdaptivePolicyConfig>={},profiles:AdaptiveProfiles={}) {
     this.config={...policyDefaults,...config};
@@ -26,7 +30,7 @@ export class AdaptivePolicy {
       const idle=Object.entries(this.profiles).filter(([k,e])=>Object.keys(e.modes).every(m=>!(this.pending.get(k+'\0'+m)??0)))
         .sort(([,a],[,b])=>Math.max(0,...Object.values(a.modes).map(s=>s!.lastUsed))-Math.max(0,...Object.values(b.modes).map(s=>s!.lastUsed)));
       if(!idle.length) throw new Error('Too many active profile keys');
-      delete this.profiles[idle[0][0]];
+      const evicted=idle[0][0];delete this.profiles[evicted];this.anchors.delete(evicted);this.probes.delete(evicted);
     }
     return this.profiles[key]??=( {modes:{},incumbent:'cpu-serial',decisions:0} );
   }
@@ -52,6 +56,9 @@ export class AdaptivePolicy {
     const fastest=[...modes].sort((a,b)=>cost(a)-cost(b))[0];
     if(!modes.includes(e.incumbent) || cost(fastest)<cost(e.incumbent)*(1-this.config.switchMargin)) e.incumbent=fastest;
     const preferred=e.incumbent;
+    const context:Context=contended?'contended':'isolated',probes=this.probes.get(key),probe=probes?.[context];
+    if(probe?.mode===preferred) delete probes![context];
+    else if(probe&&modes.includes(probe.mode)&&!this.pending.get(key+'\0'+probe.mode)) return decision(probe.mode,preferred,'explore');
     if(e.decisions>0 && e.decisions%this.config.recheckEvery===0) {
       const alternatives=modes.filter(m=>m!==preferred && this.clock-(e.modes[m]?.lastUsed??0)>=
         this.config.recheckEvery*Math.max(1,cost(m)/cost(preferred)))
@@ -76,11 +83,39 @@ export class AdaptivePolicy {
     if(!Number.isFinite(us)||us<=0) throw new RangeError('Profile duration must be positive and finite');
     this.failed(key,mode);
     const e=this.entry(key),stats=e.modes[mode]??={samples:[],lastUsed:0};
+    const context:Context=contended?'contended':'isolated',previous=stats.samples.filter(s=>s.contended===contended);
+    const before=previous.length>=this.config.minSamples ? median(previous.map(s=>s.us)) : undefined;
     stats.lastUsed=++this.clock;
     stats.samples.push({us,contended,at:Date.now()});
     const own=stats.samples.filter(s=>s.contended===contended).slice(-this.config.window);
     const other=stats.samples.filter(s=>s.contended!==contended).slice(-this.config.window);
     stats.samples=[...own,...other].sort((a,b)=>a.at-b.at);
+    let probes=this.probes.get(key);
+    if(!probes) { probes={};this.probes.set(key,probes); }
+    const probe=probes[context];
+    if(probe?.mode===mode && (us>=probe.thresholdUs || --probe.remaining<=0)) delete probes[context];
+    // Confirm a large improvement in consecutive trials. A single fast outlier
+    // never discards history; a full majority of the window must be refreshed.
+    if(mode!==e.incumbent&&before!==undefined&&us<before*.75&&
+      (!probe||probe.mode!==mode||!Number.isFinite(probe.thresholdUs)))
+      probes[context]={mode,remaining:Math.max(this.config.minSamples,Math.floor(this.config.window/2)+1)-1,thresholdUs:before*.75};
+    if(own.length>=this.config.minSamples) {
+      let anchors=this.anchors.get(key);if(!anchors) { anchors={};this.anchors.set(key,anchors); }
+      const values=anchors[mode]??={},after=median(own.map(s=>s.us)),anchor=values[context]??before??after;
+      values[context]=anchor;
+      if(Math.abs(after/anchor-1)>=.2) {
+        values[context]=after;
+        // A changing incumbent can mean a new machine regime. Recheck a nearby
+        // competing processor before trusting its old calibration indefinitely.
+        if(mode===e.incumbent&&!probes[context]) {
+          const candidates=(Object.keys(e.modes) as WorkloadMode[]).filter(m=>lane(m)!==lane(mode)&&
+            (e.modes[m]?.samples.filter(s=>s.contended===contended).length??0)>=this.config.minSamples&&
+            this.clock-e.modes[m]!.lastUsed>=this.config.minSamples&&this.estimate(key,m,contended)<=after*2)
+            .sort((a,b)=>this.estimate(key,a,contended)-this.estimate(key,b,contended));
+          if(candidates.length) probes[context]={mode:candidates[0],remaining:1,thresholdUs:Infinity};
+        }
+      }
+    }
   }
   snapshot():AdaptiveProfiles { return structuredClone(this.profiles); }
 }

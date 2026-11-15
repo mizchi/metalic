@@ -53,3 +53,46 @@ test('overlap samples do not erase a measured isolated cost',()=> {
   assert.equal(p.select('job',modes,idle).mode,'gpu-upload');
   assert.equal(p.select('job',modes,idle,true).mode,'cpu-serial');
 });
+
+test('an incumbent speed change promptly rechecks a stale competing processor',()=> {
+  // Regression from fit trial 2: calibration CPU 17 ms / GPU 20 ms, then
+  // CPU 12 ms / GPU 5.4 ms. Sparse probes left the GPU median stale for 96 jobs.
+  const p=new AdaptivePolicy({minSamples:5,window:9,recheckEvery:16});
+  for(let i=0;i<5;i++) for(const m of modes) p.observe('job',m,m==='gpu-upload'?20000:m==='cpu-parallel'?17000:100000,false);
+  const selected:WorkloadMode[]=[];
+  for(let i=0;i<20;i++) {
+    const d=p.select('job',modes,idle);selected.push(d.mode);p.started('job',d.mode);
+    p.observe('job',d.mode,d.mode==='gpu-upload'?5400:d.mode==='cpu-parallel'?12000:93000,false);
+  }
+  assert.equal(p.select('job',modes,idle).preferred,'gpu-upload');
+  assert.ok(selected.slice(-8).every(m=>m==='gpu-upload'));
+});
+
+test('a much faster probe is confirmed promptly instead of waiting for isolated medians to age out',()=> {
+  const p=new AdaptivePolicy({minSamples:3,window:9,recheckEvery:6});
+  for(let i=0;i<9;i++) for(const m of modes) p.observe('job',m,m==='gpu-upload'?200:100,false);
+  for(let i=0;i<24;i++) {
+    const d=p.select('job',modes,idle);p.started('job',d.mode);
+    p.observe('job',d.mode,d.mode==='gpu-upload'?10:100,false);
+  }
+  assert.equal(p.select('job',modes,idle).preferred,'gpu-upload');
+});
+
+test('one unusually fast probe does not replace a stable cost model',()=> {
+  const p=new AdaptivePolicy({minSamples:3,window:9,recheckEvery:6});
+  for(let i=0;i<9;i++) for(const m of modes) p.observe('job',m,m==='gpu-upload'?200:100,false);
+  p.observe('job','gpu-upload',10,false);
+  const probe=p.select('job',modes,idle);assert.equal(probe.mode,'gpu-upload');assert.equal(probe.reason,'explore');
+  p.started('job',probe.mode);p.observe('job',probe.mode,200,false);
+  assert.equal(p.select('job',modes,idle).preferred,'cpu-serial');
+  assert.equal(p.estimate('job','gpu-upload'),200);
+});
+
+test('probe confirmations stay in their observed contention context',()=> {
+  const p=new AdaptivePolicy({minSamples:3,window:9});
+  for(let i=0;i<9;i++) for(const contended of [false,true]) for(const m of modes)
+    p.observe('job',m,m==='gpu-upload'?200:100,contended);
+  p.observe('job','gpu-upload',10,true);
+  assert.equal(p.select('job',modes,idle,false).mode,'cpu-serial');
+  assert.equal(p.select('job',modes,idle,true).mode,'gpu-upload');
+});

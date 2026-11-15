@@ -47,6 +47,7 @@ just bench-buffers
 8. [CPU GPU 協調回数の比較検証](<reports/CPU GPU 協調回数の比較検証.md>) — 同じ kernel 列へ強制 feedback を挿入し、依存境界の費用を検証。
 9. [CPU GPU アルゴリズムの比較検証](<reports/CPU GPU アルゴリズムの比較検証.md>) — SHA-256 Merkle、histogram、安定圧縮を native CPU と実測比較。
 10. [CPU GPU 自動配置の検証](<reports/CPU GPU 自動配置の検証.md>) — 常駐 scheduler、反復計測による配置学習、保存と再探索、初回費用と競合。
+11. [CPU GPU 配置の fit とチューニング](<reports/CPU GPU 配置の fit とチューニング.md>) — GPU／CPU 向きの対照、別入力の評価 gate、古い校正の回帰と再確認。
 
 `pnpm parse --cpu file.np` は独立した CPU oracle を明示的に使う。`--module --cpu` では関数モジュールの oracle を使う。GPU が使えない場合はエラーにし、暗黙の CPU fallback はしない。`--chunk-size 7` などで字句チャンクを変更できる。
 
@@ -92,7 +93,7 @@ const experiment = runWorkloads([
 
 ## 実測で CPU／GPU を選ぶ
 
-`AdaptiveScheduler` は上の3アルゴリズムを対象に、CPU 単一／GCD 並列と GPU を繰り返し計測して選ぶ。CPU と GPU の native worker を一つずつ常駐させ、独立した仕事を並行実行する。`run` を繰り返すだけで各候補を既定3回ずつ試し、以後は直近の中央値と待ち行列から配置を決める。明示的な `calibrate` は、候補ごとの warmup を除外して先に学習する API。
+`AdaptiveScheduler` は登録済みの5アルゴリズムを対象に、CPU 単一／GCD 並列と GPU を繰り返し計測して選ぶ。CPU と GPU の native worker を一つずつ常駐させ、独立した仕事を並行実行する。`run` を繰り返すだけで各候補を既定3回ずつ試し、以後は直近の中央値と待ち行列から配置を決める。明示的な `calibrate` は、候補ごとの warmup を除外して先に学習する API。
 
 ```ts
 import { AdaptiveScheduler } from './src/adaptive.ts';
@@ -117,6 +118,24 @@ try {
 学習の `serviceUs` は native の全結果照合、JSON／IPC、CPU 消費を含む。`queueUs` は自 scheduler 内の待ち、`totalUs` はその和、`nativeServiceUs` と `timings` は内訳。初回起動・準備・校正は別に報告する。既知の最速方式より必ず速くなる保証はなく、約16 µsの小処理では IPC／判断費が目立つ。`just bench-adaptive` の [試行1](measurements/apple-m5-adaptive-trial1.json)・[試行2](measurements/apple-m5-adaptive-trial2.json)・[試行3](measurements/apple-m5-adaptive-trial3.json)では、大 compaction は CPU、Merkle はその時点の実測に応じ CPU／GPU を選んだ。Merkle の連続投入での並行実行の利益は試行間で変わり、常に高速化する結果にはなっていない。
 
 これは登録した純粋な処理の配置最適化。言語 frontend の自動 CPU 化、任意関数の GPU コード生成、kernel fusion／JIT、実行途中の移動は未実装。
+
+## 配置が fit することを検査する
+
+`just bench-fit` は、大きい TEA32／Merkle、小さい TEA32、単一鎖の pointer chase、compaction、uniform／hot histogram の8ケースで配置を検査する。TEA32 は固定 zero-key の32-cycle整数演算で、CPU は4 block の NEON＋GCD、GPU は block ごとに並列化する。pointer chase は全ノードを通る一本の循環鎖で、次アドレスが直前の load に依存する。CPU 並列指定でも、この依存を省略しない。
+
+```sh
+just bench-fit
+# 校正数・履歴窓・再探索間隔・切替え幅・評価入力を変え、結果を別名で保存
+just bench-fit --min-samples 5 --window 9 --recheck-every 16 --switch-margin 0.1 --seed 91 --output build/fit-experiment.json
+```
+
+学習は通常の `run` だけで行う。評価は別 seed の入力を使い、固定 CPU/GPU 対照は `learn: false` で学習に入れない。全byte同値の hot histogram は seed を変えても同じ入力になる例外。各候補と auto を4件ずつの回転順で各96件測る。分類は実測で決め、CPU／GPU 向きという事前ラベルを scheduler へ渡さない。
+
+gate は、許容候補（最小 service 中央値の1.1倍＋10 µs以内）への定常選択率90%以上、探索込みの推定 regret 15%以下、API 中央値が最速固定候補の1.25倍＋20 µs以内を要求する。CPU／GPU 両方の明確な実測勝者も必要。四分位範囲が重なる場合などは ambiguous と記録する。失敗時も JSON を保存して非ゼロ終了する。既定出力は `build/fit-benchmark.json`、明示した `--output` は既存ファイルを上書きしない。
+
+標準設定の最終 [試行4](measurements/apple-m5-fit-trial4.json)は8ケース合格、探索を除く766/766件が許容候補だった。[試行2](measurements/apple-m5-fit-trial2.json)の古い GPU 校正から復帰できない失敗、修正後も積極的な設定が compaction で基準未達だった [試行3](measurements/apple-m5-fit-trial3.json)も保存した。標準値は3標本・窓9・再探索64・margin 10%を維持する。
+
+再探索に加え、採用中の費用が20%以上変われば推定費用2倍以内の別 processor を再確認し、代替候補が25%以上速くなった観測には連続確認を行う。一つの外れ値で履歴を捨てず、窓の過半数を更新する。詳細な gate と制約は [fit レポート](<reports/CPU GPU 配置の fit とチューニング.md>)を参照。配置が正しくても小処理の IPC／判断費は残り、単一鎖という条件を多数の独立鎖に一般化しない。
 
 ## 現在の言語範囲
 
@@ -186,9 +205,9 @@ AST の NodeId は本体の括弧等を除いた token 順。node span はその
 
 ## 検証と計測
 
-`just test` は ABI 生成・ビルド、TypeScript strict 検査、48本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
+`just test` は ABI 生成・ビルド、TypeScript strict 検査、56本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
 
-`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式×同時slot数2方式×出力2方式で実行し、通常612件と実験専用 feedback 34件に加え、workload92件・adaptive scheduler 12件の計750 GPU実行を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。複数 slot の順序・所有期間、非同期入力 snapshot、発行後の例外時の解放もテストする。
+`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式×同時slot数2方式×出力2方式で実行し、通常612件と実験専用 feedback 34件に加え、workload140件・adaptive scheduler 18件の計804 GPU実行を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。複数 slot の順序・所有期間、非同期入力 snapshot、発行後の例外時の解放もテストする。
 
 `just bench` は3回の warmup 後20回を測り、`build/benchmark.json` に保存する。GPU frontend 時間は確保・初期化・encode/submit・最後の wait を含み、最終 JSON 化は含まない。device interval、library/pipeline setup、プロセス起動・23回の実行と最終 AST の転送を含む batch wall time も分ける。OS の Metal cache は無効化していない。CPU は TypeScript の正しさ確認用 oracle であり、最適化された CPU parser との速度比較ではない。p95 も20標本の参考値。frontend の自動 CPU/GPU 選択には、同じ契約の native CPU 実装が必要になる。
 

@@ -22,4 +22,6 @@ test('fit assessment reports ambiguous distributions and does not hide explorati
   assert.equal(fit.fitRate,.9);assert.equal(fit.steadyFitRate,1);assert.ok(fit.estimatedRegret>0);
   assert.throws(()=>assessFit(controls,[{mode:'cpu-serial',serviceUs:NaN,apiUs:2}]),/finite/);
   assert.throws(()=>assessFit(samples('cpu-serial',100),samples('cpu-serial',100)),/CPU and GPU/);
+  const noisy=[20,30,40,60,65,75,150,160,200].map(us=>({mode:'gpu-upload' as const,serviceUs:us,apiUs:us+5}));
+  assert.equal(assessFit([...samples('cpu-serial',100),...noisy],samples('cpu-serial',100)).family,'ambiguous');
 });
