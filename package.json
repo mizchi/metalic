@@ -13,7 +13,8 @@
     "parse": "node src/cli.ts",
     "bench": "node scripts/bench.ts",
     "bench:diagnostics": "node scripts/bench-diagnostics.ts",
-    "bench:buffers": "node scripts/bench-buffers.ts"
+    "bench:buffers": "node scripts/bench-buffers.ts",
+    "bench:scheduling": "node scripts/bench-scheduling.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

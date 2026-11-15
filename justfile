@@ -23,5 +23,8 @@ bench-diagnostics: build
 bench-buffers: build
   pnpm bench:buffers
 
+bench-scheduling: build
+  pnpm bench:scheduling
+
 validate: build
   node scripts/validate-metal.mjs

@@ -25,8 +25,8 @@ public:
   void submitted(id<MTLCommandBuffer> command) { submission=command; }
 };
 
-// The current driver is synchronous and allows one lease per pool. A future
-// asynchronous driver must use multiple slots, not overwrite this active one.
+// One slot has one exclusive lease. The driver uses a bounded ring of slots;
+// GPU completion alone must never make this slot available to a new job.
 class BufferPool {
   id<MTLBuffer> source=nil,arena=nil;
   bool borrowed=false;
@@ -37,6 +37,7 @@ public:
   BufferPool(const BufferPool&)=delete;
   BufferPool& operator=(const BufferPool&)=delete;
   BufferPool(BufferPool&&)=delete;
+  size_t capacityBytes() const { return source.length+arena.length; }
 };
 
 inline BufferLease::~BufferLease() {

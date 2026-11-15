@@ -43,12 +43,28 @@ just bench-buffers
 4. [診断集約の比較検証](reports/診断集約の比較検証.md) — MSL 4.0で3方式を実装・照合し、発行回数と処理時間を比較。
 5. [バッファ再利用の比較検証](reports/バッファ再利用の比較検証.md) — バッファの再利用・初期化範囲・区間別時間を検証。
 6. [CPU GPU 協調 の 実ワークロード評価](<reports/CPU GPU 協調 の 実ワークロード評価.md>) — 状態を CPU に保つ設計を、必須 feedback・アムダールの法則・実ワークロードから評価。
+7. [CPU GPU バッチ実行の比較検証](<reports/CPU GPU バッチ実行の比較検証.md>) — 複数 slot の所有期間、非同期 API、全 AST／summary の計測。
 
 `pnpm parse --cpu file.np` は独立した CPU oracle を明示的に使う。`--module --cpu` では関数モジュールの oracle を使う。GPU が使えない場合はエラーにし、暗黙の CPU fallback はしない。`--chunk-size 7` などで字句チャンクを変更できる。
 
 診断集約は `--diagnostics packed`（既定）、`hierarchical`、`tree` で切り替える。TS API では第4引数に `{diagnostics: 'tree'}` 等を渡せる。結果の `mslVersion` は shader が報告した言語バージョン、`diagnosticDispatches` は診断専用 dispatch の件数を表す。
 
 `--buffers fresh|reuse|selective` または TS API の第4引数 `{buffers: 'selective'}` 等で、毎回確保、再利用と全初期化、再利用と必要な列だけの初期化を比較できる。既定は `selective`。再利用は一つの native request 内の複数入力・反復が対象で、API 呼出し間の常駐 worker は未実装。`timingsUs` は準備・確保・初期化・発行・commit/wait・結果オブジェクト構築の区間を持ち、`bufferAllocations` はその回の Metal buffer 確保数、`initializedBytes` は arena 初期化の CPU 書き込み量を表す。`poisonBuffers: true` は初期化漏れの検証用で、計測時は無効にする。
+
+独立入力を重ねるには `{maxInFlight: 3}` を指定する（1〜8、既定1）。CPU は別 slot の準備・encode、GPU は発行済み入力、CPU は完了した別入力の結果構築を進める。`native/batch.h` が FIFO と出力順を管理し、`native/flight.h` の future が source／arena を保持する。GPU の completion handler は semaphore を通知するだけで、slot の再利用は CPU の結果構築後に行う。例外時も発行済み GPU 処理を待ってから解放する。slot を増やす分だけ保持容量も増える。
+
+`parseGpuBatch`／`parseGpuModules` は全 AST を返す。`checkGpuBatch`／`checkGpuModules` は同じ GPU pass 列を実行し、`valid`、診断、token／node／function 件数だけ返す。失敗時は node／function 件数0とし、未検証 AST は公開しない。`checkGpuBatchAsync`／`checkGpuModulesAsync` は Promise を返すので、Node 側の I/O や他の状態処理も進められる。入力は呼出し時に JSON snapshot として確定するが、結果の版を検証して採用する責任は呼出し側にある。各呼出しで native process を作る点は共通である。
+
+```ts
+import { checkGpuModulesAsync } from './src/gpu.ts';
+const future = checkGpuModulesAsync(sources, 64, 1, { maxInFlight: 3 });
+// 独立した I/O や次 batch の準備を進める
+const results = await future;
+```
+
+CLI も複数ファイルを受け付ける。`pnpm parse --module --summary --in-flight 3 a.np b.np` は GPU の summary を返し、全 AST の CPU 展開を省く。一ファイルなら従来どおり単一オブジェクト、複数なら入力順の配列になる。
+
+`batch.wallUs` は native の最初の入力準備から全結果の構築までで、setup と JSON／IPC を含まない。`batch.peakLeasedSlots` は CPU 消費待ちを含む slot 数で、同時に演算中の GPU 数ではない。`batch.peakBufferBytes` は保持する Metal source／arena の合計容量で RSS ではない。`flightSamples` は準備・submit・GPU 時刻・完了通知・CPU 消費の timeline を持つ。複数 slot の `elapsedUs`／`submitWaitUs` には他入力の CPU 作業中の経過時間も含むため、入力ごとの値を合計して batch 時間にしない。`completionWaitUs` は通知を待ったホスト時間で、readback 固有の費用ではない。
 
 `just bench-buffers` は7ケース×3方式を同じ process／library で比較し、結果を `build/buffers-benchmark.json` に保存する。[試行1](measurements/apple-m5-buffers-trial1.json)・[試行2](measurements/apple-m5-buffers-trial2.json)に source hashes と全標本を保存した。大モジュールの初期化書込み量は約13.34→1.56 MBに減ったが、pool は2の冪へ丸めた最大容量を保持する。処理時間・確保容量・初期化量は分けて扱う。
 
@@ -100,7 +116,7 @@ fn identity(text: str): str { text }
 
 [`native/contract.h`](native/contract.h) が ABI と enum の正本。`scripts/generate.mjs` は TypeScript の enum 定数を生成する。[`src/contract.ts`](src/contract.ts) が公開結果型で、`native/passes.h` の移動専用パストークンが予約順と入力の再使用を検査する。予約済みの状態と GPU 完了は区別し、結果は完了後にだけ読む。これは Nanopass の段階契約を参考にした手書きの構成で、Scheme Nanopass Framework を GPU 上で動かしたものではない。
 
-中間データは単一の shared buffer 内の SoA 列に保持する。トークン・ノードの **容量**をソース byte 数で抑え、**論理件数**は GPU control buffer に置く。各 dispatch は容量を上界とし、GPU が件数で guard する。中間件数の CPU readback、トークンごとの CPU callback はない。各入力につき一つの command buffer と最後の明示的 completion wait 一回で処理する。通常の Metal command buffer の資源保持とホスト側の所有オブジェクトを、完了まで維持する。
+中間データは各入力の shared arena 内の SoA 列に保持する。トークン・ノードの **容量**をソース byte 数で抑え、**論理件数**は GPU control buffer に置く。各 dispatch は容量を上界とし、GPU が件数で guard する。中間件数の CPU readback、トークンごとの CPU callback はない。各入力につき一つの command buffer と最後の完了通知待ち一回で処理する。command buffer と future の資源保持を、GPU 完了と CPU 消費の両方が終わるまで維持する。
 
 最終結果を JSON に dump するため CPU が列を読む。外部 API へ長寿命の GPU バッファ handle を返す機能は未実装。入力上限は一つにつき 1 MiB。すべてを shared にしてあり、storage mode の最適化や Metal 4 専用 API はまだ比較していない。
 
@@ -120,13 +136,13 @@ AST の NodeId は本体の括弧等を除いた token 順。node span はその
 
 ## 検証と計測
 
-`just test` は ABI 生成・ビルド、TypeScript strict 検査、25本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
+`just test` は ABI 生成・ビルド、TypeScript strict 検査、31本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
 
-`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式で実行し、計153件を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。
+`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式×同時slot数2方式×出力2方式で実行し、計612件を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。複数 slot の順序・所有期間、非同期入力 snapshot、発行後の例外時の解放もテストする。
 
 `just bench` は3回の warmup 後20回を測り、`build/benchmark.json` に保存する。GPU frontend 時間は確保・初期化・encode/submit・最後の wait を含み、最終 JSON 化は含まない。device interval、library/pipeline setup、プロセス起動・23回の実行と最終 AST の転送を含む batch wall time も分ける。OS の Metal cache は無効化していない。CPU は TypeScript の正しさ確認用 oracle であり、最適化された CPU parser との速度比較ではない。p95 も20標本の参考値。自動 CPU/GPU 選択はまだ実装しない。
 
-初回の tree 方式の計測 snapshot とソース SHA-256 は [`measurements/apple-m5.json`](measurements/apple-m5.json) に保存している。診断の改善を比較する `just bench-diagnostics` は、各ケースにつき同一プロセスで3方式の順序を回転し、3 warmup＋30標本＋表示用の最終1回を実行して `build/diagnostics-benchmark.json` に保存する。[試行1](measurements/apple-m5-diagnostics-trial1.json)・[試行2](measurements/apple-m5-diagnostics-trial2.json)は別の保存記録。現段階では容量上界への dispatch と毎回の確保・初期化が残り、次は arena 再利用、count を使う indirect dispatch、同じ契約の native CPU baseline を比較する。
+初回の tree 方式の計測 snapshot とソース SHA-256 は [`measurements/apple-m5.json`](measurements/apple-m5.json) に保存している。診断の改善を比較する `just bench-diagnostics` は、各ケースにつき同一プロセスで3方式の順序を回転し、3 warmup＋30標本＋表示用の最終1回を実行して `build/diagnostics-benchmark.json` に保存する。[試行1](measurements/apple-m5-diagnostics-trial1.json)・[試行2](measurements/apple-m5-diagnostics-trial2.json)は別の保存記録。現在は arena 再利用・選択的初期化・複数 slot を実装済み。容量上界への dispatch は残り、count を使う indirect dispatch と同じ契約の native CPU baseline は今後の比較になる。
 
 Apple M5 での初回 tree 方式のモジュール計測（各関数に32項の式、中央値。現在の比較は上記の試行1・2を参照）：
 

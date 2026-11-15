@@ -19,6 +19,8 @@
 - 構文・名前・型の診断優先順位と同一段階での最小 byte/code を維持する。
 - バッファ等の資源は GPU completion まで保持し、再利用は完了後に行う。
 - pool の lease は GPU 完了と CPU の結果構築が終わるまで返さない。選択的初期化を変更したら `poisonBuffers: true` で layout・入力長・成功/失敗を切り替え、未初期化読み取りを検査する。
+- 独立入力の CPU スケジュールは `native/batch.h`、完了通知と所有権は `native/flight.h` に置く。completion handler は通知だけを行い、pool slot を返さない。例外時も pending flight を待ってから Runtime を破棄する。
+- `maxInFlight` は1〜8（既定1）。同じ slot の次入力準備は前入力の CPU 消費後に限る。summary API は検査済み件数と診断を返し、エラー時の node/function 件数は0とする。
 
 ## 環境とリサーチ
 

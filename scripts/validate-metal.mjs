@@ -15,9 +15,10 @@ const moduleSources=['fn f(x:u32):u32{(x+1)*2}', 'fn f(x:str):str{x}',
   'fn recovered(x:str):str{x}'];
 for(const [language,inputs,oracle] of [['expression',sources,parseReference],['module',moduleSources,parseModuleReference]]) {
   for(const diagnostics of ['tree','hierarchical','packed']) {
+   for(const maxInFlight of [1,3]) for(const output of ['full','summary']) {
     const result=spawnSync(`${root}build/frontend-metal`,[`${root}native`],{
       input:JSON.stringify({sources:inputs,chunkSize:7,language,diagnostics,
-        buffers:['fresh','reuse','selective'],poisonBuffers:true}),encoding:'utf8',maxBuffer:32*1024*1024,
+        buffers:['fresh','reuse','selective'],poisonBuffers:true,maxInFlight,output}),encoding:'utf8',maxBuffer:32*1024*1024,
       env:{...process.env,MTL_DEBUG_LAYER:'1',MTL_SHADER_VALIDATION:'1'},
     });
     assert.equal(result.status,0,result.stderr);
@@ -28,10 +29,20 @@ for(const [language,inputs,oracle] of [['expression',sources,parseReference],['m
       assert.equal(actual.buffers,['fresh','reuse','selective'][i%3]);
       const source=inputs[Math.floor(i/3)],expected=oracle(source);
       assert.deepEqual(actual.diagnostic,expected.diagnostic,source.slice(0,80));
-      assert.deepEqual(actual.nodes,expected.nodes);
-      if(language==='module') assert.deepEqual(actual.functions,expected.functions);
+      if(output==='full') {
+        assert.deepEqual(actual.tokens,expected.tokens);
+        assert.deepEqual(actual.nodes,expected.nodes);
+        if(language==='module') assert.deepEqual(actual.functions,expected.functions);
+      } else {
+        assert.equal(actual.valid,expected.diagnostic===null);
+        assert.equal(actual.tokenCount,expected.tokens.length);
+        assert.equal(actual.nodeCount,expected.nodes.length);
+        assert.equal(actual.functionCount,'functions' in expected ? expected.functions.length : 0);
+        assert.ok(!('tokens' in actual) && !('nodes' in actual) && !('functions' in actual));
+      }
     });
     console.log(result.stderr.trim());
-    console.log(`Metal validation (${language}/${diagnostics}): ${parsed.length} executions across three buffer modes, no reported validation errors`);
+    console.log(`Metal validation (${language}/${diagnostics}/${maxInFlight} slots/${output}): ${parsed.length} executions, no reported validation errors`);
+   }
   }
 }

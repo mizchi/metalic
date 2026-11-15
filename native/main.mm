@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <deque>
+#include <memory>
 #include "contract.h"
 #include "passes.h"
 
@@ -41,14 +43,15 @@ static BufferStrategy parseBuffers(id value) {
   return !value || [value isEqual:@"selective"] ? BufferStrategy::Selective : [value isEqual:@"reuse"] ? BufferStrategy::Reuse : BufferStrategy::Fresh;
 }
 struct Configuration { DiagnosticStrategy diagnostics; BufferStrategy buffers; };
+#include "flight.h"
 
-// Normal tracked command buffers retain their resources. This object and every
-// allocation also stay alive until the ONLY host completion wait has returned.
+// One queue preserves GPU pass order. Separate leases allow CPU preparation and
+// consumption to overlap other inputs; GPU passes never call back to the CPU.
 class Runtime {
   id<MTLDevice> device;
   id<MTLCommandQueue> queue;
   NSMutableDictionary<NSString*, id<MTLComputePipelineState>>* pipelines;
-  BufferPool pools[2];
+  BufferPool pools[2][MaxInFlight];
 public:
   double setupUs=0;
   Runtime(NSString* directory) {
@@ -88,9 +91,14 @@ public:
     setupUs=elapsed(start,mach_absolute_time());
   }
   NSString* name() { return device.name; }
+  size_t retainedBytes() const {
+    size_t total=0;
+    for(const auto& strategy:pools) for(const auto& slot:strategy) total+=slot.capacityBytes();
+    return total;
+  }
 
-  NSDictionary* run(NSString* input,U32 chunk,bool materialize,bool moduleMode,DiagnosticStrategy diagnostics,
-      BufferStrategy buffers,bool poisonBuffers) {
+  std::unique_ptr<Flight> submit(NSString* input,U32 chunk,bool materialize,bool moduleMode,DiagnosticStrategy diagnostics,
+      BufferStrategy buffers,bool poisonBuffers,U32 slot,bool summary) {
     uint64_t start=mach_absolute_time();
     NSData* bytes=[input dataUsingEncoding:NSUTF8StringEncoding];
     check(bytes!=nil,"Source cannot be encoded as UTF-8");
@@ -118,9 +126,11 @@ public:
     l.maps0=plan.take(chunks*SCount); l.maps1=plan.take(chunks*SCount);
     U32 total=plan.next+4*cap+1024; plan.limit=total;
     uint64_t planned=mach_absolute_time();
-    BufferPool* pool=buffers==BufferStrategy::Fresh ? nullptr : &pools[buffers==BufferStrategy::Reuse ? 0 : 1];
-    BufferLease lease=acquireBuffers(device,pool,cap,size_t(total)*4);
-    id<MTLBuffer> source=lease.source,arena=lease.arena;
+    BufferPool* pool=buffers==BufferStrategy::Fresh ? nullptr : &pools[buffers==BufferStrategy::Reuse ? 0 : 1][slot];
+    // Direct construction uses C++17 copy elision; the lease itself is immovable.
+    std::unique_ptr<BufferLease> lease(new BufferLease(acquireBuffers(device,pool,cap,size_t(total)*4)));
+    id<MTLBuffer> source=lease->source,arena=lease->arena;
+    U32 allocations=lease->allocations;
     uint64_t acquired=mach_absolute_time();
     size_t poisonedBytes=0;
     if(poisonBuffers) {
@@ -134,6 +144,7 @@ public:
 
     id<MTLCommandBuffer> command=[queue commandBuffer];
     id<MTLComputeCommandEncoder> encoder=[command computeCommandEncoder];
+    check(command!=nil && encoder!=nil,"Cannot create Metal command encoder");
     [encoder setBuffer:source offset:0 atIndex:0];
     [encoder setBuffer:arena offset:0 atIndex:1];
     U32 dispatches=0, diagnosticDispatches=0;
@@ -249,70 +260,78 @@ public:
     }
     [encoder endEncoding];
     uint64_t encoded=mach_absolute_time();
-    [command commit]; lease.submitted(command);
-    U32 hostWaits=0;
-    [command waitUntilCompleted]; // No host reads or waits occur between passes.
-    hostWaits++;
+    // Consume the final scheduling capability, not a claim about validation.
+    // The owned future below is the only route to host inspection of the IR.
     if(moduleMode) typed->consume(); else checked.consume();
-    uint64_t finished=mach_absolute_time();
-    check(command.status==MTLCommandBufferStatusCompleted,
-      command.error ? command.error.localizedDescription.UTF8String : "GPU command did not complete");
-    U32 tokenCount=memory[l.control+CTokenCount], nodeCount=memory[l.control+CNodeCount];
-    check(tokenCount<=cap && nodeCount<=tokenCount,"GPU count exceeded arena capacity");
-    U32 errorCode=memory[l.control+CErrorCode], root=memory[l.control+CRoot];
-    U32 functionCount=moduleMode ? memory[l.control+CFunctionCount] : 0;
-    check(errorCode || (moduleMode ? functionCount>0 && functionCount<=MaxFunctions : root<nodeCount),"AST root missing");
-    NSMutableDictionary* result=[@{@"backend":@"metal",@"device":device.name,@"passes":names,
-      @"dispatches":@(dispatches),@"hostWaits":@(hostWaits),@"chunkSize":@(chunk),
-      @"diagnostics":strategyName(diagnostics),@"diagnosticDispatches":@(diagnosticDispatches),
-      @"mslVersion":[NSString stringWithFormat:@"%u.%u",memory[l.control+CMetalVersion]/100,(memory[l.control+CMetalVersion]%100)/10],
-      @"buffers":bufferName(buffers),@"bufferAllocations":@(lease.allocations),
-      @"initializedBytes":@(initializedBytes),@"poisonedBytes":@(poisonedBytes),
-      @"sourceCapacityBytes":@(source.length),@"arenaCapacityBytes":@(arena.length),
-      @"elapsedUs":@(elapsed(start,finished)),
-      @"gpuUs":@((command.GPUEndTime-command.GPUStartTime)*1e6),
-      @"arenaBytes":@(size_t(total)*4)} mutableCopy];
-    if(materialize) {
-      NSMutableArray* tokens=[NSMutableArray new];
-      for(U32 j=0;j<tokenCount;j++) [tokens addObject:@{@"kind":@(memory[l.tokKind+j]),
-        @"begin":@(memory[l.tokBegin+j]),@"end":@(memory[l.tokEnd+j])}];
-      NSMutableArray* nodes=[NSMutableArray new];
-      if(!errorCode) for(U32 j=0;j<nodeCount;j++) {
-        NSMutableDictionary* node=[@{
-        @"kind":@(memory[l.nodeKind+j]),@"begin":@(memory[l.nodeBegin+j]),@"end":@(memory[l.nodeEnd+j]),
-        @"value":@(memory[l.nodeValue+j]),@"left":nullable(memory[l.left+j]),@"right":nullable(memory[l.right+j])} mutableCopy];
-        if(moduleMode) {
-          node[@"functionId"]=@(memory[l.nodeOwner+j]); node[@"binding"]=nullable(memory[l.nodeBinding+j]);
-          node[@"type"]=@(memory[l.nodeType+j]);
-        }
-        [nodes addObject:node];
-      }
-      if(moduleMode) {
-        NSMutableArray* functions=[NSMutableArray new];
-        if(!errorCode) for(U32 f=0;f<functionCount;f++) {
-          U32 name=memory[l.fnName+f];
-          NSMutableArray* parameters=[NSMutableArray new];
-          for(U32 j=0;j<memory[l.fnParamCount+f];j++) {
-            U32 token=memory[l.fnParams+f*MaxParameters+j];
-            [parameters addObject:@{@"binding":@(token),@"begin":@(memory[l.tokBegin+token]),
-              @"end":@(memory[l.tokEnd+token]),@"type":@(memory[l.paramType+token])}];
-          }
-          [functions addObject:@{@"begin":@(memory[l.tokBegin+name]),@"end":@(memory[l.tokEnd+name]),
-            @"parameters":parameters,@"returnType":@(memory[l.fnReturnType+f]),@"body":@(memory[l.fnRoot+f])}];
-        }
-        result[@"functions"]=functions;
-      }
-      result[@"tokens"]=tokens; result[@"nodes"]=nodes;
-      result[@"root"]=errorCode || moduleMode ? (id)[NSNull null] : nullable(root);
+    auto consume=[=](uint64_t finished)->NSMutableDictionary* {
+      U32 tokenCount=memory[l.control+CTokenCount], nodeCount=memory[l.control+CNodeCount];
+      check(tokenCount<=cap && nodeCount<=tokenCount,"GPU count exceeded arena capacity");
+      U32 errorCode=memory[l.control+CErrorCode], root=memory[l.control+CRoot];
+      U32 functionCount=moduleMode ? memory[l.control+CFunctionCount] : 0;
+      check(errorCode || (moduleMode ? functionCount>0 && functionCount<=MaxFunctions : root<nodeCount),"AST root missing");
+      NSMutableDictionary* result=[@{@"backend":@"metal",@"device":device.name,@"passes":names,
+        @"dispatches":@(dispatches),@"hostWaits":@1,@"chunkSize":@(chunk),
+        @"diagnostics":strategyName(diagnostics),@"diagnosticDispatches":@(diagnosticDispatches),
+        @"mslVersion":[NSString stringWithFormat:@"%u.%u",memory[l.control+CMetalVersion]/100,(memory[l.control+CMetalVersion]%100)/10],
+        @"buffers":bufferName(buffers),@"bufferAllocations":@(allocations),
+        @"initializedBytes":@(initializedBytes),@"poisonedBytes":@(poisonedBytes),
+        @"sourceCapacityBytes":@(source.length),@"arenaCapacityBytes":@(arena.length),
+        @"elapsedUs":@(elapsed(start,finished)),
+        @"gpuUs":@((command.GPUEndTime-command.GPUStartTime)*1e6),
+        @"arenaBytes":@(size_t(total)*4)} mutableCopy];
       result[@"diagnostic"]=errorCode ? (id)@{@"code":@(errorCode),@"offset":@(memory[l.control+CErrorOffset])} : (id)[NSNull null];
-    }
-    uint64_t materialized=mach_absolute_time();
-    result[@"timingsUs"]=@{@"prepareUs":@(elapsed(start,planned)),@"acquireUs":@(elapsed(planned,acquired)),
-      @"initializeUs":@(elapsed(acquired,initialized)),@"encodeUs":@(elapsed(initialized,encoded)),
-      @"submitWaitUs":@(elapsed(encoded,finished)),@"materializeUs":@(elapsed(finished,materialized))};
-    return result;
+      if(summary) {
+        result[@"output"]=@"summary"; result[@"valid"]=@(!errorCode);
+        result[@"tokenCount"]=@(tokenCount); result[@"nodeCount"]=@(errorCode ? 0 : nodeCount);
+        result[@"functionCount"]=@(errorCode ? 0 : functionCount);
+      }
+      if(materialize && !summary) {
+        NSMutableArray* tokens=[NSMutableArray new];
+        for(U32 j=0;j<tokenCount;j++) [tokens addObject:@{@"kind":@(memory[l.tokKind+j]),
+          @"begin":@(memory[l.tokBegin+j]),@"end":@(memory[l.tokEnd+j])}];
+        NSMutableArray* nodes=[NSMutableArray new];
+        if(!errorCode) for(U32 j=0;j<nodeCount;j++) {
+          NSMutableDictionary* node=[@{
+          @"kind":@(memory[l.nodeKind+j]),@"begin":@(memory[l.nodeBegin+j]),@"end":@(memory[l.nodeEnd+j]),
+          @"value":@(memory[l.nodeValue+j]),@"left":nullable(memory[l.left+j]),@"right":nullable(memory[l.right+j])} mutableCopy];
+          if(moduleMode) {
+            node[@"functionId"]=@(memory[l.nodeOwner+j]); node[@"binding"]=nullable(memory[l.nodeBinding+j]);
+            node[@"type"]=@(memory[l.nodeType+j]);
+          }
+          [nodes addObject:node];
+        }
+        if(moduleMode) {
+          NSMutableArray* functions=[NSMutableArray new];
+          if(!errorCode) for(U32 f=0;f<functionCount;f++) {
+            U32 name=memory[l.fnName+f];
+            NSMutableArray* parameters=[NSMutableArray new];
+            for(U32 j=0;j<memory[l.fnParamCount+f];j++) {
+              U32 token=memory[l.fnParams+f*MaxParameters+j];
+              [parameters addObject:@{@"binding":@(token),@"begin":@(memory[l.tokBegin+token]),
+                @"end":@(memory[l.tokEnd+token]),@"type":@(memory[l.paramType+token])}];
+            }
+            [functions addObject:@{@"begin":@(memory[l.tokBegin+name]),@"end":@(memory[l.tokEnd+name]),
+              @"parameters":parameters,@"returnType":@(memory[l.fnReturnType+f]),@"body":@(memory[l.fnRoot+f])}];
+          }
+          result[@"functions"]=functions;
+        }
+        result[@"tokens"]=tokens; result[@"nodes"]=nodes;
+        result[@"root"]=errorCode || moduleMode ? (id)[NSNull null] : nullable(root);
+      }
+      uint64_t materialized=mach_absolute_time();
+      result[@"timingsUs"]=@{@"prepareUs":@(elapsed(start,planned)),@"acquireUs":@(elapsed(planned,acquired)),
+        @"initializeUs":@(elapsed(acquired,initialized)),@"encodeUs":@(elapsed(initialized,encoded)),
+        @"submitWaitUs":@(elapsed(encoded,finished)),@"materializeUs":@(elapsed(finished,materialized))};
+      return result;
+    };
+    auto flight=std::make_unique<Flight>(std::move(lease),command,std::move(consume));
+    flight->started=start; flight->slot=slot; flight->fresh=buffers==BufferStrategy::Fresh;
+    flight->commit();
+    return flight;
   }
 };
+
+#include "batch.h"
 
 int main(int argc,const char** argv) {
   @autoreleasepool {
@@ -346,42 +365,17 @@ int main(int argc,const char** argv) {
       id poison=request[@"poisonBuffers"];
       check(!poison || CFGetTypeID((__bridge CFTypeRef)poison)==CFBooleanGetTypeID(),"poisonBuffers must be a boolean");
       bool poisonBuffers=[poison boolValue];
+      id flightLimit=request[@"maxInFlight"];
+      check(!flightLimit || ([flightLimit isKindOfClass:[NSNumber class]] &&
+        CFGetTypeID((__bridge CFTypeRef)flightLimit)!=CFBooleanGetTypeID() &&
+        [flightLimit doubleValue]>=1 && [flightLimit doubleValue]<=MaxInFlight &&
+        [flightLimit doubleValue]==[flightLimit unsignedIntValue]),"maxInFlight must be 1..8");
+      U32 maxInFlight=flightLimit ? [flightLimit unsignedIntValue] : 1;
+      id outputMode=request[@"output"];
+      check(!outputMode || [outputMode isEqual:@"full"] || [outputMode isEqual:@"summary"],"Invalid output mode");
+      bool summary=[outputMode isEqual:@"summary"];
       Runtime runtime(@(argv[1]));
-      NSMutableArray* results=[NSMutableArray new];
-      for(id source in sources) {
-        check([source isKindOfClass:[NSString class]],"Source must be a string");
-        NSMutableArray* samples=[NSMutableArray new];
-        NSMutableArray* gpuSamples=[NSMutableArray new];
-        NSMutableArray* last=[NSMutableArray new];
-        NSMutableArray* timings=[NSMutableArray new];
-        NSMutableArray* allocations=[NSMutableArray new];
-        for(U32 i=0;i<configurations.size();i++) {
-          [samples addObject:[NSMutableArray new]]; [gpuSamples addObject:[NSMutableArray new]];
-          [timings addObject:[NSMutableArray new]]; [allocations addObject:[NSMutableArray new]];
-          [last addObject:[NSNull null]];
-        }
-        for(U32 run=0;run<repeat;run++) {
-          // Rotate order each round, comparing schedules with the same device,
-          // library and process rather than timing separate process lifetimes.
-          for(U32 slot=0;slot<configurations.size();slot++) {
-            U32 index=(slot+run)%U32(configurations.size());
-            @autoreleasepool {
-              auto config=configurations[index];
-              NSDictionary* current=runtime.run(source,chunk,run+1==repeat,moduleMode,config.diagnostics,config.buffers,poisonBuffers);
-              last[index]=current;
-              [samples[index] addObject:current[@"elapsedUs"]]; [gpuSamples[index] addObject:current[@"gpuUs"]];
-              [timings[index] addObject:current[@"timingsUs"]]; [allocations[index] addObject:current[@"bufferAllocations"]];
-            }
-          }
-        }
-        for(U32 i=0;i<configurations.size();i++) {
-          NSMutableDictionary* result=[last[i] mutableCopy];
-          result[@"samplesUs"]=samples[i]; result[@"gpuSamplesUs"]=gpuSamples[i];
-          result[@"timingSamplesUs"]=timings[i]; result[@"allocationSamples"]=allocations[i];
-          result[@"setupUs"]=@(runtime.setupUs);
-          [results addObject:result];
-        }
-      }
+      NSArray* results=runBatch(runtime,sources,configurations,chunk,repeat,moduleMode,poisonBuffers,maxInFlight,summary);
       NSData* output=[NSJSONSerialization dataWithJSONObject:results options:0 error:&error];
       check(output!=nil,"Cannot serialize results");
       fwrite(output.bytes,1,output.length,stdout); fputc('\n',stdout);
