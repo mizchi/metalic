@@ -57,3 +57,11 @@ export const TypeKind = {
   TypeStr: 2,
 } as const;
 export type TypeKind = typeof TypeKind[keyof typeof TypeKind];
+export const WorkloadLimit = {
+  MaxMerkleLeaves: 1048576,
+  MaxHistogramBytes: 67108864,
+  MaxCompactValues: 16777216,
+  MaxWorkloadJobs: 64,
+  MaxWorkloadOutput: 8192,
+} as const;
+export type WorkloadLimit = typeof WorkloadLimit[keyof typeof WorkloadLimit];

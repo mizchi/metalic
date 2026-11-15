@@ -63,3 +63,29 @@ export interface GpuSummary extends GpuMetrics {
 }
 export interface ModuleResult extends ParseResult { nodes: ModuleNode[]; functions: FunctionDecl[] }
 export interface GpuModuleResult extends GpuResult { nodes: ModuleNode[]; functions: FunctionDecl[] }
+
+export type WorkloadAlgorithm = 'merkle-sha256' | 'histogram256' | 'compact-u32';
+export type WorkloadMode = 'cpu-serial' | 'cpu-parallel' | 'gpu-resident' | 'gpu-upload';
+export interface WorkloadSpec {
+  algorithm: WorkloadAlgorithm; count: number; seed?: number;
+  distribution?: 'uniform' | 'hot'; mask?: number;
+}
+export interface WorkloadOptions {
+  warmups?: number; samples?: number; modes?: WorkloadMode[];
+  poisonBuffers?: boolean; includeOutput?: boolean;
+}
+export interface WorkloadSample {
+  elapsedUs: number; prepareUs: number; encodeUs: number; waitUs: number;
+  computeUs: number; gpuUs: number; consumeUs: number;
+}
+export interface WorkloadRecord extends WorkloadSpec {
+  mode: WorkloadMode; inputBytes: number; inputHash: string;
+  resultCount: number; checksum: number; digestHex?: string; output?: number[];
+  verified: boolean; hostWaits: number; dispatches: number; cpuWorkers: number;
+  arenaBytes: number; bufferBytes: number; acquireUs: number;
+  samples: WorkloadSample[];
+}
+export interface WorkloadExperiment {
+  device: string; mslVersion: string; cpuThreads: number; setupUs: number;
+  records: WorkloadRecord[];
+}

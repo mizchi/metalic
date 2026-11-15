@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 export function generate() {
   const root = fileURLToPath(new URL('../', import.meta.url));
   const header = readFileSync(`${root}native/contract.h`, 'utf8');
-  const names = ['TokenKind', 'NodeKind', 'ErrorCode', 'TypeKind'];
+  const names = ['TokenKind', 'NodeKind', 'ErrorCode', 'TypeKind', 'WorkloadLimit'];
   const bits=Number(header.match(/DiagnosticCodeBits\s*=\s*(\d+)/)?.[1]);
   const maxSource=Number(header.match(/MaxSourceBytes\s*=\s*(\d+)/)?.[1]);
   const errors=header.match(/enum ErrorCode : U32 \{([^}]+)\}/)?.[1];

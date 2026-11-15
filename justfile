@@ -29,5 +29,9 @@ bench-scheduling: build
 bench-cooperation: build
   pnpm bench:cooperation
 
+bench-workloads: build
+  pnpm bench:workloads
+
 validate: build
   node scripts/validate-metal.mjs
+  node scripts/validate-workloads.mjs

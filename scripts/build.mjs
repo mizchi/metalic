@@ -14,4 +14,10 @@ for(const [target,flags] of [[output,[]],[`${root}build/frontend-feedback`,['-DM
       '-framework','Foundation','-framework','Metal',`${root}native/main.mm`,'-o',target],{stdio:'inherit'});
   }
 }
+const workloadInputs=['native/workloads.mm','native/workloads_cpu.h','native/workloads_plan.h','native/contract.h','native/buffers.h'];
+const workloadOutput=`${root}build/workloads-metal`;
+if(workloadInputs.some(path=>timestamp(`${root}${path}`)>timestamp(workloadOutput))) {
+  execFileSync('xcrun',['clang++','-O3','-std=c++17','-fobjc-arc','-Wall','-Wextra',
+    '-framework','Foundation','-framework','Metal',`${root}native/workloads.mm`,'-o',workloadOutput],{stdio:'inherit'});
+}
 console.log(output);
