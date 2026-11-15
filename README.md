@@ -42,6 +42,7 @@ just bench-buffers
 3. [Metal GPU 言語処理系 の 設計最適化](<reports/Metal GPU 言語処理系 の 設計最適化.md>) — 2024–2026年の研究、現行の費用、MSL 4.1 を基準にした v2。
 4. [診断集約の比較検証](reports/診断集約の比較検証.md) — MSL 4.0で3方式を実装・照合し、発行回数と処理時間を比較。
 5. [バッファ再利用の比較検証](reports/バッファ再利用の比較検証.md) — バッファの再利用・初期化範囲・区間別時間を検証。
+6. [CPU GPU 協調 の 実ワークロード評価](<reports/CPU GPU 協調 の 実ワークロード評価.md>) — 状態を CPU に保つ設計を、必須 feedback・アムダールの法則・実ワークロードから評価。
 
 `pnpm parse --cpu file.np` は独立した CPU oracle を明示的に使う。`--module --cpu` では関数モジュールの oracle を使う。GPU が使えない場合はエラーにし、暗黙の CPU fallback はしない。`--chunk-size 7` などで字句チャンクを変更できる。
 
