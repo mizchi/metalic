@@ -33,3 +33,8 @@
 - TypeScript の CPU oracle を最適化された CPU 性能 baseline として扱わない。
 - アルゴリズム実験は `native/workloads*` と `src/workloads.ts`。ABI は同じ `contract.h` の `WorkloadParams` が正本。CPU の単一／GCD 並列の速い方と比べ、GPU device interval だけを全体速度にしない。
 - CPU 並列 compaction は選択済み範囲の末尾を超えて書かない。分岐なしの上書きを使う場合も、次 chunk の出力を壊さない guard を保持する。
+- workload の実行・資源所有は `native/workloads_runtime.h`、単発ハーネスは `native/workloads.mm`、常駐 JSONL worker は `native/workload-worker.mm`。CPU/GPU 候補でアルゴリズムや検証範囲を変えない。
+- 自動配置の純粋な方策は `src/adaptive-policy.ts`、履歴の検証・atomic 保存は `src/adaptive-profile.ts`、常駐 worker 接続は `src/adaptive-worker.ts`、待ち行列・所有期間は `src/adaptive.ts`。公開型は同じ `contract.ts` に置く。
+- scheduler の score は native 検証・JSON/IPC・CPU 消費を含む service wall time。自 scheduler の待ち、初回準備、校正と混ぜない。競合履歴と単独履歴を分け、GPU timestamp だけで配置を決めない。
+- prepared handle は immutable replica。予約容量を入力生成より前に検査し、release／close は受理済み処理・GPU completion・CPU 消費まで待つ。worker の失敗を別 backend で隠れて再試行しない。
+- プロファイルは build/MSL・機種・OS・Node・検証設定の fingerprint と TTL を検証する。raw observation を上限内で保存し、seed そのものを再利用キーにしない。複数 writer の同一 profile path はサポートしない。

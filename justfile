@@ -32,6 +32,10 @@ bench-cooperation: build
 bench-workloads: build
   pnpm bench:workloads
 
+bench-adaptive: build
+  pnpm bench:adaptive
+
 validate: build
   node scripts/validate-metal.mjs
   node scripts/validate-workloads.mjs
+  MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 node scripts/validate-adaptive.mjs

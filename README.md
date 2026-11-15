@@ -46,12 +46,13 @@ just bench-buffers
 7. [CPU GPU バッチ実行の比較検証](<reports/CPU GPU バッチ実行の比較検証.md>) — 複数 slot の所有期間、非同期 API、全 AST／summary の計測。
 8. [CPU GPU 協調回数の比較検証](<reports/CPU GPU 協調回数の比較検証.md>) — 同じ kernel 列へ強制 feedback を挿入し、依存境界の費用を検証。
 9. [CPU GPU アルゴリズムの比較検証](<reports/CPU GPU アルゴリズムの比較検証.md>) — SHA-256 Merkle、histogram、安定圧縮を native CPU と実測比較。
+10. [CPU GPU 自動配置の検証](<reports/CPU GPU 自動配置の検証.md>) — 常駐 scheduler、反復計測による配置学習、保存と再探索、初回費用と競合。
 
 `pnpm parse --cpu file.np` は独立した CPU oracle を明示的に使う。`--module --cpu` では関数モジュールの oracle を使う。GPU が使えない場合はエラーにし、暗黙の CPU fallback はしない。`--chunk-size 7` などで字句チャンクを変更できる。
 
 診断集約は `--diagnostics packed`（既定）、`hierarchical`、`tree` で切り替える。TS API では第4引数に `{diagnostics: 'tree'}` 等を渡せる。結果の `mslVersion` は shader が報告した言語バージョン、`diagnosticDispatches` は診断専用 dispatch の件数を表す。
 
-`--buffers fresh|reuse|selective` または TS API の第4引数 `{buffers: 'selective'}` 等で、毎回確保、再利用と全初期化、再利用と必要な列だけの初期化を比較できる。既定は `selective`。再利用は一つの native request 内の複数入力・反復が対象で、API 呼出し間の常駐 worker は未実装。`timingsUs` は準備・確保・初期化・発行・commit/wait・結果オブジェクト構築の区間を持ち、`bufferAllocations` はその回の Metal buffer 確保数、`initializedBytes` は arena 初期化の CPU 書き込み量を表す。`poisonBuffers: true` は初期化漏れの検証用で、計測時は無効にする。
+`--buffers fresh|reuse|selective` または TS API の第4引数 `{buffers: 'selective'}` 等で、毎回確保、再利用と全初期化、再利用と必要な列だけの初期化を比較できる。既定は `selective`。frontend の再利用は一つの native request 内の複数入力・反復が対象。API 呼出し間の常駐 worker は、後述のアルゴリズム scheduler のみ実装済み。`timingsUs` は準備・確保・初期化・発行・commit/wait・結果オブジェクト構築の区間を持ち、`bufferAllocations` はその回の Metal buffer 確保数、`initializedBytes` は arena 初期化の CPU 書き込み量を表す。`poisonBuffers: true` は初期化漏れの検証用で、計測時は無効にする。
 
 独立入力を重ねるには `{maxInFlight: 3}` を指定する（1〜8、既定1）。CPU は別 slot の準備・encode、GPU は発行済み入力、CPU は完了した別入力の結果構築を進める。`native/batch.h` が FIFO と出力順を管理し、`native/flight.h` の future が source／arena を保持する。GPU の completion handler は semaphore を通知するだけで、slot の再利用は CPU の結果構築後に行う。例外時も発行済み GPU 処理を待ってから解放する。slot を増やす分だけ保持容量も増える。
 
@@ -88,6 +89,34 @@ const experiment = runWorkloads([
 `WorkloadParams` と上限は native/contract.h が正本。GPU kernel は native/workloads.metal、CPU は native/workloads_cpu.h。全結果を計測後に照合し、debug の poisonBuffers では source／arena の logical guard も確認する。includeOutput は小入力の全配列を返す検証用で、compaction は8192要素以下に限る。cpuTasks は GCD chunk 数で物理コア数ではない。
 
 最終 native／MSL の [試行3](measurements/apple-m5-workloads-trial3.json)・[試行4](measurements/apple-m5-workloads-trial4.json)と、API入口修正後の [試行5](measurements/apple-m5-workloads-trial5.json)を保存した。大きな Merkle は GPU の利益を確認し、histogram は常駐・分布次第、最適化後の compaction は CPU が速かった。[比較レポート](<reports/CPU GPU アルゴリズムの比較検証.md>)に条件と限界を記載した。
+
+## 実測で CPU／GPU を選ぶ
+
+`AdaptiveScheduler` は上の3アルゴリズムを対象に、CPU 単一／GCD 並列と GPU を繰り返し計測して選ぶ。CPU と GPU の native worker を一つずつ常駐させ、独立した仕事を並行実行する。`run` を繰り返すだけで各候補を既定3回ずつ試し、以後は直近の中央値と待ち行列から配置を決める。明示的な `calibrate` は、候補ごとの warmup を除外して先に学習する API。
+
+```ts
+import { AdaptiveScheduler } from './src/adaptive.ts';
+const scheduler = await AdaptiveScheduler.open({ profilePath: 'build/profile.json' });
+try {
+  const input = await scheduler.prepare({ algorithm: 'merkle-sha256', count: 262144 });
+  await scheduler.calibrate(input); // 任意。通常の run も学習する
+  const results = await scheduler.runBatch([input, input, input, input]);
+  console.log(results.map(r => [r.mode, r.decision.reason, r.totalUs]));
+  await scheduler.release(input);
+} finally {
+  await scheduler.close(); // 受理済みの仕事と GPU 完了・CPU 消費を待ち、プロファイルを保存
+}
+```
+
+入力は生成レシピから作る immutable handle。`prepare` は idle 時に呼ぶ。CPU/GPU 両方の入力・scratch・検証用基準結果を保持し、入力生成と基準結果の計算は `prepareUs` に含める。`inputPlacement: 'cpu'`（既定）の GPU 候補は毎回の copy 込み。`prepare(spec, {inputPlacement: 'resident'})` は準備済み GPU 入力を使い、CPU replica も保持する。任意の外部配列や GPU-only buffer の移送にはまだ対応しない。
+
+履歴は非競合／競合それぞれ直近9件、切替えには既定10%の改善を要求する。64回ごとを再探索の機会とし、遅い候補ほど間隔を延ばす。`contended` は CPU/GPU の RPC 実行期間の重なりを表す。プロファイルは処理種類・件数・実際の分布の特徴・入力配置ごとに保存し、別 seed でも同じ形状なら再利用する。binary・MSL・scheduler ソース・機種・OS・Node・検証設定が変わると無効化し、既定24時間で観測を失効させる。保存は atomic rename。一つの profile path を複数インスタンスから同時に書かない。
+
+既定上限は受理済み16件、準備済み8 handle、論理予約1 GiB。`runBatch` は上限まで投入して空きを待ち、入力順で結果を返す。直接の `run` が満杯ならエラー。`release` はその handle の受理済み処理を待つ。worker／GPU エラー時は未実行分も失敗させ、別 backend で隠れて再試行しない。既定の履歴ファイルは `build/adaptive-profile.json`。`flush` と `close` で保存を待てる。
+
+学習の `serviceUs` は native の全結果照合、JSON／IPC、CPU 消費を含む。`queueUs` は自 scheduler 内の待ち、`totalUs` はその和、`nativeServiceUs` と `timings` は内訳。初回起動・準備・校正は別に報告する。既知の最速方式より必ず速くなる保証はなく、約16 µsの小処理では IPC／判断費が目立つ。`just bench-adaptive` の [試行1](measurements/apple-m5-adaptive-trial1.json)・[試行2](measurements/apple-m5-adaptive-trial2.json)では大 compaction を CPU に配置し、GPU 固定より速くなった一方、Merkle の連続投入は GPU 固定と概ね同程度だった。
+
+これは登録した純粋な処理の配置最適化。言語 frontend の自動 CPU 化、任意関数の GPU コード生成、kernel fusion／JIT、実行途中の移動は未実装。
 
 ## 現在の言語範囲
 
@@ -157,11 +186,11 @@ AST の NodeId は本体の括弧等を除いた token 順。node span はその
 
 ## 検証と計測
 
-`just test` は ABI 生成・ビルド、TypeScript strict 検査、37本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
+`just test` は ABI 生成・ビルド、TypeScript strict 検査、48本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
 
-`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式×同時slot数2方式×出力2方式で実行し、通常612件と実験専用 feedback 34件に加え、workload92件の計738 GPU実行を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。複数 slot の順序・所有期間、非同期入力 snapshot、発行後の例外時の解放もテストする。
+`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式×同時slot数2方式×出力2方式で実行し、通常612件と実験専用 feedback 34件に加え、workload92件・adaptive scheduler 12件の計750 GPU実行を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。複数 slot の順序・所有期間、非同期入力 snapshot、発行後の例外時の解放もテストする。
 
-`just bench` は3回の warmup 後20回を測り、`build/benchmark.json` に保存する。GPU frontend 時間は確保・初期化・encode/submit・最後の wait を含み、最終 JSON 化は含まない。device interval、library/pipeline setup、プロセス起動・23回の実行と最終 AST の転送を含む batch wall time も分ける。OS の Metal cache は無効化していない。CPU は TypeScript の正しさ確認用 oracle であり、最適化された CPU parser との速度比較ではない。p95 も20標本の参考値。自動 CPU/GPU 選択はまだ実装しない。
+`just bench` は3回の warmup 後20回を測り、`build/benchmark.json` に保存する。GPU frontend 時間は確保・初期化・encode/submit・最後の wait を含み、最終 JSON 化は含まない。device interval、library/pipeline setup、プロセス起動・23回の実行と最終 AST の転送を含む batch wall time も分ける。OS の Metal cache は無効化していない。CPU は TypeScript の正しさ確認用 oracle であり、最適化された CPU parser との速度比較ではない。p95 も20標本の参考値。frontend の自動 CPU/GPU 選択には、同じ契約の native CPU 実装が必要になる。
 
 初回の tree 方式の計測 snapshot とソース SHA-256 は [`measurements/apple-m5.json`](measurements/apple-m5.json) に保存している。診断の改善を比較する `just bench-diagnostics` は、各ケースにつき同一プロセスで3方式の順序を回転し、3 warmup＋30標本＋表示用の最終1回を実行して `build/diagnostics-benchmark.json` に保存する。[試行1](measurements/apple-m5-diagnostics-trial1.json)・[試行2](measurements/apple-m5-diagnostics-trial2.json)は別の保存記録。現在は arena 再利用・選択的初期化・複数 slot を実装済み。容量上界への dispatch は残り、count を使う indirect dispatch と frontend と同じ契約の native CPU baseline は今後の比較になる。
 

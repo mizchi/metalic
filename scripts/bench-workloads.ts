@@ -17,7 +17,7 @@ const quantile=(xs:number[],p:number)=>[...xs].sort((a,b)=>a-b)[Math.ceil((xs.le
 const records=result.records.map(r=>({...r,p50Us:quantile(r.samples.map(s=>s.elapsedUs),.5),
   p95Us:quantile(r.samples.map(s=>s.elapsedUs),.95),gpuP50Us:quantile(r.samples.map(s=>s.gpuUs),.5),
   consumeP50Us:quantile(r.samples.map(s=>s.consumeUs),.5)}));
-const sourcePaths=['native/contract.h','native/buffers.h','native/workloads.mm','native/workloads.metal',
+const sourcePaths=['native/contract.h','native/buffers.h','native/workloads.mm','native/workloads_runtime.h','native/workloads.metal',
   'native/workloads_cpu.h','native/workloads_plan.h','scripts/build.mjs','scripts/bench-workloads.ts',
   'src/schema.ts','src/contract.ts','src/workloads.ts'];
 const output={measuredAt:new Date().toISOString(),node:process.version,

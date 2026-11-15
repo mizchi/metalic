@@ -90,3 +90,36 @@ export interface WorkloadExperiment {
   device: string; mslVersion: string; cpuThreads: number; setupUs: number;
   records: WorkloadRecord[];
 }
+
+export interface AdaptivePolicyConfig {
+  minSamples: number; window: number; recheckEvery: number; switchMargin: number;
+}
+export interface AdaptiveObservation { us: number; contended: boolean; at: number }
+export interface AdaptiveModeProfile { samples: AdaptiveObservation[]; lastUsed: number }
+export interface AdaptiveEntry {
+  modes: Partial<Record<WorkloadMode,AdaptiveModeProfile>>;
+  incumbent: WorkloadMode; decisions: number;
+}
+export type AdaptiveProfiles = Record<string,AdaptiveEntry>;
+export type AdaptiveReason = 'calibrating' | 'explore' | 'fastest' | 'hysteresis' | 'queue' | 'forced';
+export interface AdaptiveDecision {
+  mode: WorkloadMode; preferred: WorkloadMode; reason: AdaptiveReason;
+  estimatedServiceUs: number; estimatedFinishUs: number;
+}
+export interface AdaptiveOptions extends Partial<AdaptivePolicyConfig> {
+  profilePath?: string; profileTtlMs?: number;
+  maxPending?: number; maxPrepared?: number; maxPreparedBytes?: number;
+  poisonBuffers?: boolean;
+}
+export interface WorkloadHandle {
+  readonly id: string; readonly spec: Readonly<WorkloadSpec>;
+  readonly profileKey: string; readonly inputHash: string;
+  readonly inputPlacement: 'cpu' | 'resident';
+  readonly reservedBytes: number; readonly prepareUs: number;
+}
+export interface AdaptiveResult {
+  mode: WorkloadMode; decision: AdaptiveDecision;
+  verified: boolean; checksum: number; resultCount: number; digestHex?: string;
+  serviceUs: number; queueUs: number; totalUs: number; nativeServiceUs: number;
+  contended: boolean; workerPid: number; timings: WorkloadSample;
+}
