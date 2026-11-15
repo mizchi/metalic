@@ -27,7 +27,7 @@
 
 - 当面は MSL 4.0／M5／macOS 26.6.2 の環境で検証を続ける。MSL 4.1 への移行は後回しとし、特定の検証で必須になる場合は理由をユーザーへ報告する。
 - OS／Xcode 更新はユーザーが後で行う方針。移行作業の一環でシステム更新を実行しない。
-- `docs/internal/reports/` に統合レポート、`docs/internal/research_notes/` に出典・実験を保存する。Bend は参照元であり、別 checkout へのローカル依存を作らない。
+- `docs/internal/reports/` に統合レポート、`docs/internal/research_notes/` に出典・実験を保存する。Bend は試験実装へのリンクとして参照し、Bend ソースのコンパイルを実装目標に含めない。別 checkout へのローカル依存を作らない。
 - 利用者向け説明は本リポジトリの README と `docs/`、開発手順は `CONTRIBUTING.md`、実装・計測の詳細は `docs/internal/` に置く。explainer は説明・検証の手法として参照し、資料を別リポジトリに保存しない。`just docs-verify` は追加依存や別checkoutなしで資料の数値・図の定義・参照を検査する。
 - 論文・著者解説・公開実装・提案を区別し、Metal で実証されていない性能を断定しない。
 - `measurements/` は保存時点の計測。ソースを変えた後も過去の hash を書き換えず、新しい記録を作る。

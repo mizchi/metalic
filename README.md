@@ -18,7 +18,6 @@ Apple Silicon の Metal GPU で、小さな言語の解析・名前解決・型�
 - 書いたプログラムの実行・評価や、実行ファイルの生成。
 - 関数呼出し、ローカル `let`、分岐、一般的な型推論、affine 使用検査。
 - 任意のユーザー関数を Metal に変換し、CPU／GPU へ自動配置すること。配置実験は登録済みの処理だけが対象。
-- Bend のソースのコンパイル。Bend は設計の参照元で、Metalic は独立した試作言語。
 
 GPU を使えば必ず速くなるわけではなく、実用コンパイラの代替として使える段階でもありません。
 
@@ -89,6 +88,10 @@ node sample.ts
 - [対応している言語仕様](docs/language.md)
 - [CPU／GPU 配置の実験 API](docs/experiments.md)
 - [開発への参加・ビルド・検証](CONTRIBUTING.md)
+
+## 参考実装
+
+[Bend](https://github.com/bendlang/bend) を GPU 向け言語の試験実装として参照しています。Metalic は独立した試作言語で、Bend ソースのコンパイルは目標に含めません。
 
 ## ライセンス
 
