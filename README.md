@@ -39,11 +39,44 @@ pnpm parse --summary examples/arithmetic.np
 pnpm parse --module --summary examples/functions.np
 ```
 
-たとえば次の宣言を解析・検査できます。関数を呼び出したり、計算結果を返したりする機能はまだありません。
+## サンプルコード
+
+[examples/functions.np](examples/functions.np) では、数値演算と文字列を返す関数の名前・型を検査できます。関数を呼び出したり、計算結果を返したりする機能はまだありません。
 
 ```text
 fn add(x: u32, y: u32): u32 { x + y }
+fn arithmetic(x: u32, y: u32): u32 { -(x + 1) * y + 42 }
 fn identity(text: str): str { text }
+fn greeting(): str { "こんにちは" }
+```
+
+TypeScript からも GPU で検査できます。次をリポジトリのルートに `sample.ts` として保存します。
+
+```ts
+import { readFileSync } from 'node:fs';
+import { checkGpuModulesAsync } from './src/gpu.ts';
+
+const source = readFileSync('examples/functions.np', 'utf8');
+const [result] = await checkGpuModulesAsync([source]);
+console.log(JSON.stringify({
+  valid: result.valid,
+  functionCount: result.functionCount,
+  diagnostic: result.diagnostic,
+}, null, 2));
+```
+
+ビルド後に実行すると、4関数の検査結果を取得できます。
+
+```sh
+node sample.ts
+```
+
+```json
+{
+  "valid": true,
+  "functionCount": 4,
+  "diagnostic": null
+}
 ```
 
 成功時は解析結果、失敗時は診断を返します。診断があれば CLI の終了コードは1です。GPU が使えない場合の自動 CPU 切替えはありません。参照用の CPU 実装は `--cpu` で明示的に選べます。
@@ -56,3 +89,7 @@ fn identity(text: str): str { text }
 - [対応している言語仕様](docs/language.md)
 - [CPU／GPU 配置の実験 API](docs/experiments.md)
 - [開発への参加・ビルド・検証](CONTRIBUTING.md)
+
+## ライセンス
+
+Copyright 2026 mizchi. [Apache License 2.0](LICENSE) で公開しています。
