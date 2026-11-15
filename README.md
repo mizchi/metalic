@@ -44,6 +44,7 @@ just bench-buffers
 5. [バッファ再利用の比較検証](reports/バッファ再利用の比較検証.md) — バッファの再利用・初期化範囲・区間別時間を検証。
 6. [CPU GPU 協調 の 実ワークロード評価](<reports/CPU GPU 協調 の 実ワークロード評価.md>) — 状態を CPU に保つ設計を、必須 feedback・アムダールの法則・実ワークロードから評価。
 7. [CPU GPU バッチ実行の比較検証](<reports/CPU GPU バッチ実行の比較検証.md>) — 複数 slot の所有期間、非同期 API、全 AST／summary の計測。
+8. [CPU GPU 協調回数の比較検証](<reports/CPU GPU 協調回数の比較検証.md>) — 同じ kernel 列へ強制 feedback を挿入し、依存境界の費用を検証。
 
 `pnpm parse --cpu file.np` は独立した CPU oracle を明示的に使う。`--module --cpu` では関数モジュールの oracle を使う。GPU が使えない場合はエラーにし、暗黙の CPU fallback はしない。`--chunk-size 7` などで字句チャンクを変更できる。
 
@@ -67,6 +68,8 @@ CLI も複数ファイルを受け付ける。`pnpm parse --module --summary --i
 `batch.wallUs` は native の最初の入力準備から全結果の構築までで、setup と JSON／IPC を含まない。`batch.peakLeasedSlots` は CPU 消費待ちを含む slot 数で、同時に演算中の GPU 数ではない。`batch.peakBufferBytes` は保持する Metal source／arena の合計容量で RSS ではない。`flightSamples` は準備・submit・GPU 時刻・完了通知・CPU 消費の timeline を持つ。複数 slot の `elapsedUs`／`submitWaitUs` には他入力の CPU 作業中の経過時間も含むため、入力ごとの値を合計して batch 時間にしない。`completionWaitUs` は通知を待ったホスト時間で、readback 固有の費用ではない。
 
 `just bench-buffers` は7ケース×3方式を同じ process／library で比較し、結果を `build/buffers-benchmark.json` に保存する。[試行1](measurements/apple-m5-buffers-trial1.json)・[試行2](measurements/apple-m5-buffers-trial2.json)に source hashes と全標本を保存した。大モジュールの初期化書込み量は約13.34→1.56 MBに減ったが、pool は2の冪へ丸めた最大容量を保持する。処理時間・確保容量・初期化量は分けて扱う。
+
+`just bench-cooperation` は実験専用の `build/frontend-feedback` を使い、同じ kernel 列を32／8／1 dispatchごとに区切って CPU で2件の count を読んでから再開する。0は途中確認なし。kernel・引数・発行範囲の signature と最終出力を照合し、count によって発行量を変えない。通常の `frontend-metal` はこの制御を拒否する。[協調回数の計測](measurements/apple-m5-cooperation-trial1.json)を保存した。command buffer 分割・再発行・GPU scheduling も変わる比較であり、readback 単独の費用や普遍的な往復時間とは扱わない。
 
 ## 現在の言語範囲
 
@@ -136,9 +139,9 @@ AST の NodeId は本体の括弧等を除いた token 順。node span はその
 
 ## 検証と計測
 
-`just test` は ABI 生成・ビルド、TypeScript strict 検査、31本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
+`just test` は ABI 生成・ビルド、TypeScript strict 検査、33本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
 
-`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式×同時slot数2方式×出力2方式で実行し、計612件を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。複数 slot の順序・所有期間、非同期入力 snapshot、発行後の例外時の解放もテストする。
+`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式×同時slot数2方式×出力2方式で実行し、計612件と実験専用 feedback 34件の計646件を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。複数 slot の順序・所有期間、非同期入力 snapshot、発行後の例外時の解放もテストする。
 
 `just bench` は3回の warmup 後20回を測り、`build/benchmark.json` に保存する。GPU frontend 時間は確保・初期化・encode/submit・最後の wait を含み、最終 JSON 化は含まない。device interval、library/pipeline setup、プロセス起動・23回の実行と最終 AST の転送を含む batch wall time も分ける。OS の Metal cache は無効化していない。CPU は TypeScript の正しさ確認用 oracle であり、最適化された CPU parser との速度比較ではない。p95 も20標本の参考値。自動 CPU/GPU 選択はまだ実装しない。
 

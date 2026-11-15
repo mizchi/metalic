@@ -15,6 +15,7 @@
 - ABI と enum の正本は `native/contract.h`。`src/schema.ts` は生成物。
 - 公開 API は `src/contract.ts`。状態とロジック、論理パスと物理 dispatch を分離する。
 - GPU 経路に CPU parser の暗黙 fallback や中間 count の host readback を追加しない。
+- 強制 host feedback の比較は `METALIC_FEEDBACK_EXPERIMENT` を付けた `frontend-feedback` のみに隔離する。通常の `frontend-metal` は `feedbackEvery` を拒否する。比較時は dispatch signature と最終結果を揃え、count で launch 範囲を変えない。
 - span は UTF-8 byte offset。エラー時に未検証の AST を公開しない。
 - 構文・名前・型の診断優先順位と同一段階での最小 byte/code を維持する。
 - バッファ等の資源は GPU completion まで保持し、再利用は完了後に行う。

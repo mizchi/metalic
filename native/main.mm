@@ -44,6 +44,7 @@ static BufferStrategy parseBuffers(id value) {
 }
 struct Configuration { DiagnosticStrategy diagnostics; BufferStrategy buffers; };
 #include "flight.h"
+#include "feedback.h"
 
 // One queue preserves GPU pass order. Separate leases allow CPU preparation and
 // consumption to overlap other inputs; GPU passes never call back to the CPU.
@@ -54,6 +55,9 @@ class Runtime {
   BufferPool pools[2][MaxInFlight];
 public:
   double setupUs=0;
+#ifdef METALIC_FEEDBACK_EXPERIMENT
+  U32 feedbackEvery=0;
+#endif
   Runtime(NSString* directory) {
     uint64_t start=mach_absolute_time();
     device=MTLCreateSystemDefaultDevice();
@@ -148,9 +152,25 @@ public:
     [encoder setBuffer:source offset:0 atIndex:0];
     [encoder setBuffer:arena offset:0 atIndex:1];
     U32 dispatches=0, diagnosticDispatches=0;
+    double completedGpuUs=0;
+#ifdef METALIC_FEEDBACK_EXPERIMENT
+    FeedbackTrace feedback(feedbackEvery);
+#endif
     Params base{l,n,cap,0,0,0,0,0,chunk,U32(moduleMode),U32(diagnostics),0};
     auto dispatch=[&](NSString* kernel,U32 size,Params p,U32 groups=0) {
+#ifdef METALIC_FEEDBACK_EXPERIMENT
+      if(feedback.every && dispatches && dispatches%feedback.every==0) {
+        [encoder endEncoding];
+        feedback.checkpoint(command,*lease,memory+l.control,dispatches);
+        command=[queue commandBuffer]; encoder=[command computeCommandEncoder];
+        check(command!=nil && encoder!=nil,"Cannot resume feedback command encoder");
+        [encoder setBuffer:source offset:0 atIndex:0]; [encoder setBuffer:arena offset:0 atIndex:1];
+      }
+#endif
       p.size=size;
+#ifdef METALIC_FEEDBACK_EXPERIMENT
+      feedback.dispatch(kernel,groups ? groups : (size+255)/256,p);
+#endif
       [encoder setComputePipelineState:pipelines[kernel]];
       [encoder setBytes:&p length:sizeof(p) atIndex:2];
       [encoder dispatchThreadgroups:MTLSizeMake(groups ? groups : (size+255)/256,1,1)
@@ -263,6 +283,9 @@ public:
     // Consume the final scheduling capability, not a claim about validation.
     // The owned future below is the only route to host inspection of the IR.
     if(moduleMode) typed->consume(); else checked.consume();
+#ifdef METALIC_FEEDBACK_EXPERIMENT
+    completedGpuUs=feedback.gpuUs;
+#endif
     auto consume=[=](uint64_t finished)->NSMutableDictionary* {
       U32 tokenCount=memory[l.control+CTokenCount], nodeCount=memory[l.control+CNodeCount];
       check(tokenCount<=cap && nodeCount<=tokenCount,"GPU count exceeded arena capacity");
@@ -277,9 +300,12 @@ public:
         @"initializedBytes":@(initializedBytes),@"poisonedBytes":@(poisonedBytes),
         @"sourceCapacityBytes":@(source.length),@"arenaCapacityBytes":@(arena.length),
         @"elapsedUs":@(elapsed(start,finished)),
-        @"gpuUs":@((command.GPUEndTime-command.GPUStartTime)*1e6),
+        @"gpuUs":@(completedGpuUs+(command.GPUEndTime-command.GPUStartTime)*1e6),
         @"arenaBytes":@(size_t(total)*4)} mutableCopy];
       result[@"diagnostic"]=errorCode ? (id)@{@"code":@(errorCode),@"offset":@(memory[l.control+CErrorOffset])} : (id)[NSNull null];
+#ifdef METALIC_FEEDBACK_EXPERIMENT
+      feedback.publish(result);
+#endif
       if(summary) {
         result[@"output"]=@"summary"; result[@"valid"]=@(!errorCode);
         result[@"tokenCount"]=@(tokenCount); result[@"nodeCount"]=@(errorCode ? 0 : nodeCount);
@@ -374,7 +400,19 @@ int main(int argc,const char** argv) {
       id outputMode=request[@"output"];
       check(!outputMode || [outputMode isEqual:@"full"] || [outputMode isEqual:@"summary"],"Invalid output mode");
       bool summary=[outputMode isEqual:@"summary"];
+#ifdef METALIC_FEEDBACK_EXPERIMENT
+      id requestedFeedback=request[@"feedbackEvery"];
+      check(!requestedFeedback || ([requestedFeedback isKindOfClass:[NSNumber class]] &&
+        CFGetTypeID((__bridge CFTypeRef)requestedFeedback)!=CFBooleanGetTypeID() &&
+        [requestedFeedback doubleValue]>=0 && [requestedFeedback doubleValue]<=4096 &&
+        [requestedFeedback doubleValue]==[requestedFeedback unsignedIntValue]),"Invalid feedback interval");
+#else
+      check(!request[@"feedbackEvery"],"feedbackEvery is benchmark-only; use frontend-feedback");
+#endif
       Runtime runtime(@(argv[1]));
+#ifdef METALIC_FEEDBACK_EXPERIMENT
+      runtime.feedbackEvery=[requestedFeedback unsignedIntValue];
+#endif
       NSArray* results=runBatch(runtime,sources,configurations,chunk,repeat,moduleMode,poisonBuffers,maxInFlight,summary);
       NSData* output=[NSJSONSerialization dataWithJSONObject:results options:0 error:&error];
       check(output!=nil,"Cannot serialize results");

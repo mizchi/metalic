@@ -57,6 +57,8 @@ just bench-scheduling
 
 ## 同じ出力契約での比較
 
+以下は commit `c93a97a` 時点の保存計測。後続の強制 feedback 実験の追加に合わせて、過去の hash は更新しない。
+
 [全標本と source hashes](../measurements/apple-m5-scheduling-trial1.json)を保存した。1／3／8 slot と full／summary の6条件を、各 round で順序を回転させて比較した。入力は固定 hash の独立 module で、各関数に8項の算術式を持つ。2 warmup＋10 retained samples、各 job の `repeat=1`。full では全 job で AST を構築しており、最終一件だけを取り出す旧 benchmark とは異なる。
 
 各 trial は新しい native process／library と空の pool を使う。OS の shader cache は消していない。native batch は最初の確保・初期化・encode・全 GPU 完了・全 CPU 結果構築を含み、library setup、JSON serialization、IPC、JS parse を含まない。API 時間にはそれらも含め、CPU oracle による一致確認は時間計測後に行う。CPU の最適化実装との速度比ではなく、同じ GPU 実装のスケジュール比較である。

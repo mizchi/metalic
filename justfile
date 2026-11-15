@@ -26,5 +26,8 @@ bench-buffers: build
 bench-scheduling: build
   pnpm bench:scheduling
 
+bench-cooperation: build
+  pnpm bench:cooperation
+
 validate: build
   node scripts/validate-metal.mjs

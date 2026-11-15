@@ -46,3 +46,23 @@ for(const [language,inputs,oracle] of [['expression',sources,parseReference],['m
    }
   }
 }
+// The deliberately blocking path is compiled into a separate experiment binary.
+for(const [language,inputs,oracle] of [['expression',sources,parseReference],['module',moduleSources,parseModuleReference]]) {
+  for(const feedbackEvery of [8,1]) {
+    const result=spawnSync(`${root}build/frontend-feedback`,[`${root}native`],{
+      input:JSON.stringify({sources:inputs,language,feedbackEvery,maxInFlight:3,output:'summary',poisonBuffers:true}),
+      encoding:'utf8',maxBuffer:32*1024*1024,env:{...process.env,MTL_DEBUG_LAYER:'1',MTL_SHADER_VALIDATION:'1'},
+    });
+    assert.equal(result.status,0,result.stderr);
+    assert.doesNotMatch(result.stderr,/error|fault|out.of.bounds|invalid (?:access|resource)/i);
+    const parsed=JSON.parse(result.stdout);
+    assert.equal(parsed.length,inputs.length);
+    parsed.forEach((actual,i)=> {
+      const expected=oracle(inputs[i]);
+      assert.deepEqual(actual.diagnostic,expected.diagnostic);
+      assert.equal(actual.tokenCount,expected.tokens.length); assert.equal(actual.nodeCount,expected.nodes.length);
+      assert.equal(actual.hostWaits,actual.feedbackWaits+1);
+    });
+    console.log(`Metal validation (experiment/${language}/feedback every ${feedbackEvery}): ${parsed.length} executions, no reported validation errors`);
+  }
+}
