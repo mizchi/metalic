@@ -38,7 +38,7 @@ static NSString* bufferName(BufferStrategy buffers) {
 static BufferStrategy parseBuffers(id value) {
   check(!value || [value isEqual:@"fresh"] || [value isEqual:@"reuse"] || [value isEqual:@"selective"],
     "Unknown buffer strategy");
-  return [value isEqual:@"selective"] ? BufferStrategy::Selective : [value isEqual:@"reuse"] ? BufferStrategy::Reuse : BufferStrategy::Fresh;
+  return !value || [value isEqual:@"selective"] ? BufferStrategy::Selective : [value isEqual:@"reuse"] ? BufferStrategy::Reuse : BufferStrategy::Fresh;
 }
 struct Configuration { DiagnosticStrategy diagnostics; BufferStrategy buffers; };
 
@@ -337,7 +337,7 @@ int main(int argc,const char** argv) {
       check([NSSet setWithArray:strategies].count==strategies.count,"Diagnostic strategies must be distinct");
       for(id value in strategies) parseStrategy(value);
       id requestedBuffers=request[@"buffers"];
-      NSArray* bufferStrategies=[requestedBuffers isKindOfClass:[NSArray class]] ? requestedBuffers : @[requestedBuffers ?: @"fresh"];
+      NSArray* bufferStrategies=[requestedBuffers isKindOfClass:[NSArray class]] ? requestedBuffers : @[requestedBuffers ?: @"selective"];
       check(bufferStrategies.count>0 && bufferStrategies.count<=3,"Expected one to three buffer strategies");
       check([NSSet setWithArray:bufferStrategies].count==bufferStrategies.count,"Buffer strategies must be distinct");
       std::vector<Configuration> configurations;

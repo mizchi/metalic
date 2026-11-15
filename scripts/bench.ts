@@ -35,6 +35,7 @@ for(const {language,source} of cases) {
     gpuDeviceP50Us:quantile(gpu.gpuSamplesUs.slice(3),.5),
     librarySetupUs:gpu.setupUs,batchWallUs,arenaBytes:gpu.arenaBytes,dispatches:gpu.dispatches,
     diagnostics:gpu.diagnostics,diagnosticDispatches:gpu.diagnosticDispatches,mslVersion:gpu.mslVersion,
+    buffers:gpu.buffers,bufferAllocations:gpu.bufferAllocations,arenaCapacityBytes:gpu.arenaCapacityBytes,initializedBytes:gpu.initializedBytes,
     device:gpu.device});
 }
 const root=fileURLToPath(new URL('../',import.meta.url));

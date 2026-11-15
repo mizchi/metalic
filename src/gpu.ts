@@ -4,7 +4,7 @@ import type { GpuResult, GpuModuleResult, GpuOptions } from './contract.ts';
 const root=fileURLToPath(new URL('../',import.meta.url));
 function run(sources: readonly string[], chunkSize:number, repeat:number, language:'expression'|'module', options:GpuOptions): GpuResult[] | GpuModuleResult[] {
   const diagnostics=options.diagnostics ?? 'packed';
-  const buffers=options.buffers ?? 'fresh';
+  const buffers=options.buffers ?? 'selective';
   const poisonBuffers=options.poisonBuffers ?? false;
   if(!['tree','hierarchical','packed'].includes(diagnostics)) throw new TypeError('Unknown diagnostic strategy');
   if(!['fresh','reuse','selective'].includes(buffers)) throw new TypeError('Unknown buffer strategy');

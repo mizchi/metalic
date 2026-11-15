@@ -41,12 +41,15 @@ just bench-buffers
 2. [Metal 言語処理系 の ナノパス設計](<reports/Metal 言語処理系 の ナノパス設計.md>) — Chez／Harlan 等を参考にした段階契約。
 3. [Metal GPU 言語処理系 の 設計最適化](<reports/Metal GPU 言語処理系 の 設計最適化.md>) — 2024–2026年の研究、現行の費用、MSL 4.1 を基準にした v2。
 4. [診断集約の比較検証](reports/診断集約の比較検証.md) — MSL 4.0で3方式を実装・照合し、発行回数と処理時間を比較。
+5. [バッファ再利用の比較検証](reports/バッファ再利用の比較検証.md) — バッファの再利用・初期化範囲・区間別時間を検証。
 
 `pnpm parse --cpu file.np` は独立した CPU oracle を明示的に使う。`--module --cpu` では関数モジュールの oracle を使う。GPU が使えない場合はエラーにし、暗黙の CPU fallback はしない。`--chunk-size 7` などで字句チャンクを変更できる。
 
 診断集約は `--diagnostics packed`（既定）、`hierarchical`、`tree` で切り替える。TS API では第4引数に `{diagnostics: 'tree'}` 等を渡せる。結果の `mslVersion` は shader が報告した言語バージョン、`diagnosticDispatches` は診断専用 dispatch の件数を表す。
 
-TS API の `{buffers: 'fresh' | 'reuse' | 'selective'}` で、毎回確保、再利用と全初期化、再利用と必要な列だけの初期化を比較できる。再利用は一つの native request 内の複数入力・反復が対象。`timingsUs` は準備・確保・初期化・発行・commit/wait・結果オブジェクト構築の区間を持ち、`bufferAllocations` はその回の Metal buffer 確保数、`initializedBytes` は arena 初期化の CPU 書き込み量を表す。`poisonBuffers: true` は初期化漏れの検証用で、計測時は無効にする。
+`--buffers fresh|reuse|selective` または TS API の第4引数 `{buffers: 'selective'}` 等で、毎回確保、再利用と全初期化、再利用と必要な列だけの初期化を比較できる。既定は `selective`。再利用は一つの native request 内の複数入力・反復が対象で、API 呼出し間の常駐 worker は未実装。`timingsUs` は準備・確保・初期化・発行・commit/wait・結果オブジェクト構築の区間を持ち、`bufferAllocations` はその回の Metal buffer 確保数、`initializedBytes` は arena 初期化の CPU 書き込み量を表す。`poisonBuffers: true` は初期化漏れの検証用で、計測時は無効にする。
+
+`just bench-buffers` は7ケース×3方式を同じ process／library で比較し、結果を `build/buffers-benchmark.json` に保存する。[試行1](measurements/apple-m5-buffers-trial1.json)・[試行2](measurements/apple-m5-buffers-trial2.json)に source hashes と全標本を保存した。大モジュールの初期化書込み量は約13.34→1.56 MBに減ったが、pool は2の冪へ丸めた最大容量を保持する。処理時間・確保容量・初期化量は分けて扱う。
 
 ## 現在の言語範囲
 

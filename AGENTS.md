@@ -18,6 +18,7 @@
 - span は UTF-8 byte offset。エラー時に未検証の AST を公開しない。
 - 構文・名前・型の診断優先順位と同一段階での最小 byte/code を維持する。
 - バッファ等の資源は GPU completion まで保持し、再利用は完了後に行う。
+- pool の lease は GPU 完了と CPU の結果構築が終わるまで返さない。選択的初期化を変更したら `poisonBuffers: true` で layout・入力長・成功/失敗を切り替え、未初期化読み取りを検査する。
 
 ## 環境とリサーチ
 

@@ -42,7 +42,7 @@ for(const job of jobs) {
     assert.equal(frontend.length,samples); assert.equal(timings.length,samples);
     timings.forEach((t,j)=>assert.ok(Math.abs(t.prepareUs+t.acquireUs+t.initializeUs+t.encodeUs+t.submitWaitUs-frontend[j])<.001));
     assert.ok(allocations.every(n=>n===(i===0 ? 2 : 0)));
-    const phaseP50Us=Object.fromEntries((Object.keys(timings[0]) as (keyof TimingBreakdown)[])
+    const phaseP50Us=Object.fromEntries((Object.keys(timings[0]) as (keyof TimingBreakdown)[]).filter(key=>key!=='materializeUs')
       .map(key=>[key,quantile(timings.map(t=>t[key]),.5)]));
     records.push({case:job.name,language:job.language,bytes:Buffer.byteLength(job.source),
       inputHash:createHash('sha256').update(job.source).digest('hex'),nodes:actual.nodes.length,buffers:actual.buffers,
@@ -52,7 +52,7 @@ for(const job of jobs) {
       frontendP50Us:quantile(frontend,.5),frontendP95Us:quantile(frontend,.95),deviceP50Us:quantile(device,.5),
       phaseP50Us,samplesUs:frontend,gpuSamplesUs:device,timingSamplesUs:timings,allocationSamples:allocations,
       firstRunUs:actual.samplesUs[0],firstAllocationCount:actual.allocationSamples[0],
-      setupUs:actual.setupUs,comparisonWallUs});
+      finalMaterializeUs:actual.timingsUs.materializeUs,setupUs:actual.setupUs,comparisonWallUs});
   }
 }
 const sourceHashes=Object.fromEntries(['native/contract.h','native/passes.h','native/buffers.h','native/arena.h',
@@ -67,6 +67,7 @@ const output={measuredAt:new Date().toISOString(),node:process.version,
     'Execution order rotates each round; three warmups, 30 retained rounds and one excluded materialization round.',
     'Frontend is the sum of prepare, acquire, initialize, encode and commit/wait intervals of EACH sample.',
     'Materialize covers result validation and native AST object creation; final JSON encoding/output and JS JSON.parse are separate.',
+    'Retained rounds do not extract AST objects; finalMaterializeUs is one final extraction sample and is not a median.',
     'prepare includes UTF-8 encoding and layout planning; initialize includes source copy and arena reset. Poisoning is disabled.',
     'Phase medians do not sum to the median frontend time. submitWait includes GPU work and notification, not pure readback.',
     'Arena capacity is allocated resource length, not process RSS. Pooled modes retain power-of-two high-water buffers until Runtime exit.',

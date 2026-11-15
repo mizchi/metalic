@@ -32,6 +32,11 @@ class BufferPool {
   bool borrowed=false;
   friend class BufferLease;
   friend BufferLease acquireBuffers(id<MTLDevice>,BufferPool*,size_t,size_t);
+public:
+  BufferPool()=default;
+  BufferPool(const BufferPool&)=delete;
+  BufferPool& operator=(const BufferPool&)=delete;
+  BufferPool(BufferPool&&)=delete;
 };
 
 inline BufferLease::~BufferLease() {
@@ -63,3 +68,4 @@ inline BufferLease acquireBuffers(id<MTLDevice> device,BufferPool* pool,size_t s
   return BufferLease(pool,source,arena,allocations);
 }
 static_assert(!std::is_copy_constructible_v<BufferLease>);
+static_assert(!std::is_copy_constructible_v<BufferPool>);
