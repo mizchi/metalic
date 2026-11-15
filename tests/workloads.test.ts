@@ -72,10 +72,13 @@ test('stable compaction preserves order across scan levels and all/none selectio
   });
 });
 
-test('workload contracts reject invalid input before native execution',()=> {
+test('workload contracts validate bounds and preserve caller-owned jobs',()=> {
   for(const count of [-1,1.5,NaN,Infinity,2**32])
     assert.throws(()=>runWorkloads([{algorithm:'compact-u32',count}]),RangeError);
   assert.throws(()=>runWorkloads([{algorithm:'unknown' as 'compact-u32',count:1}]),TypeError);
   assert.throws(()=>runWorkloads([{algorithm:'histogram256',count:1}],{samples:0}),RangeError);
   assert.throws(()=>runWorkloads([{algorithm:'compact-u32',count:8193}],{includeOutput:true}),RangeError);
+  const options={warmups:0,samples:1,jobs:[{algorithm:'compact-u32',count:0}]};
+  const result=runWorkloads([{algorithm:'compact-u32',count:1,seed:0}],options);
+  result.records.forEach(r=> { assert.equal(r.count,1); assert.equal(r.resultCount,1); });
 });

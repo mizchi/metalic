@@ -25,6 +25,7 @@ export function runWorkloads(jobs:readonly WorkloadSpec[],options:WorkloadOption
   for(const value of [options.poisonBuffers,options.includeOutput])
     if(value!==undefined && typeof value!=='boolean') throw new TypeError('Expected boolean debug/output options');
   return JSON.parse(execFileSync(`${root}build/workloads-metal`,[`${root}native`],{
-    input:JSON.stringify({jobs,...options,warmups,samples,modes}),encoding:'utf8',maxBuffer:256*1024*1024,
+    input:JSON.stringify({jobs,warmups,samples,modes,poisonBuffers:options.poisonBuffers,includeOutput:options.includeOutput}),
+    encoding:'utf8',maxBuffer:256*1024*1024,
   }));
 }

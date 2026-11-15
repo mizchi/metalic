@@ -87,7 +87,7 @@ const experiment = runWorkloads([
 
 `WorkloadParams` と上限は native/contract.h が正本。GPU kernel は native/workloads.metal、CPU は native/workloads_cpu.h。全結果を計測後に照合し、debug の poisonBuffers では source／arena の logical guard も確認する。includeOutput は小入力の全配列を返す検証用で、compaction は8192要素以下に限る。cpuTasks は GCD chunk 数で物理コア数ではない。
 
-最終ソースの [試行3](measurements/apple-m5-workloads-trial3.json)・[試行4](measurements/apple-m5-workloads-trial4.json)と全標本を保存した。大きな Merkle は GPU の利益を確認し、histogram は常駐・分布次第、最適化後の compaction は CPU が速かった。[比較レポート](<reports/CPU GPU アルゴリズムの比較検証.md>)に条件と限界を記載した。
+最終 native／MSL の [試行3](measurements/apple-m5-workloads-trial3.json)・[試行4](measurements/apple-m5-workloads-trial4.json)と、API入口修正後の [試行5](measurements/apple-m5-workloads-trial5.json)を保存した。大きな Merkle は GPU の利益を確認し、histogram は常駐・分布次第、最適化後の compaction は CPU が速かった。[比較レポート](<reports/CPU GPU アルゴリズムの比較検証.md>)に条件と限界を記載した。
 
 ## 現在の言語範囲
 

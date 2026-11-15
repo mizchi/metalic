@@ -9,6 +9,7 @@
 - CPU compaction を分岐なしにし、GCD chunk を最大4×CPU数へ分割。選択なしの chunk が他領域へ書かない guard を実装した。
 - SHA loop 展開・histogram の SIMD 同値集約も比較し、明確な改善がなかったため GPU 版は単純な構成に戻した。
 - 同じ最終ソースで試行3と4を計測し、全 source hashes の一致を確認した。
+- options に余分な jobs がある場合に入力を上書きする不具合を Red で再現し、既知の option だけを serialize して修正。計算ソースを保った試行5も保存した。
 
 ## 検査
 
@@ -28,6 +29,7 @@ cooperative kernel は SIMD width 32／group 256 を実行時に確認し、全 
 - [試行1](../../measurements/apple-m5-workloads-trial1.json): commit 09e18ee。初回CPU版と単純GPU版。
 - [試行2](../../measurements/apple-m5-workloads-trial2.json): commit d90e8dd。CPU改善＋GPU variant。
 - [試行3](../../measurements/apple-m5-workloads-trial3.json)／[試行4](../../measurements/apple-m5-workloads-trial4.json): 最終CPU版＋単純GPU版。両者の source hashes は一致。
+- [試行5](../../measurements/apple-m5-workloads-trial5.json): API の入力所有権修正後。native／MSL は試行3／4と同じ。
 - [統合レポート](<../../reports/CPU GPU アルゴリズムの比較検証.md>)。
 
 Native warm 時間は input generation、oracle生成、setup／allocation、JSON／IPC を含めない。GPU upload 方式は毎回 memcpy を含み、resident は既存GPU入力を再利用する。両方とも最終 CPU 消費を含め、単一／GCD CPU の速い方と比較する。実 CPU thread 配置や周波数は固定せず、倍率はこの実装・入力での観測値とする。

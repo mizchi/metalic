@@ -53,6 +53,16 @@ GPU は intermediate count を host に返さず、全 dispatch の後に一回�
 
 GPU 常駐よりコピー込みの p50 が短い箇所もある。copy の利益を意味せず、方式間の GPU 実行区間や scheduling が異なる。別々の中央値を引いて copy 時間を求めない。対応する prepareUs を見ると、主表の upload copy 区間 p50 は Merkle 16 MiBで0.346 ms、histogram 64 MiBで1.337 msだった。GPU／CPU の周波数、OS 負荷、core 配置は制御しておらず、p95 も15標本の参考値である。
 
+API 入口で options 内の余分な jobs が入力を上書きしないよう修正し、[試行5](../measurements/apple-m5-workloads-trial5.json)も保存した。試行3／4は commit `fd6244a` で再現でき、試行5も native／MSL のソースは同じである。最新値は次になる。
+
+| 最新試行の大入力 | CPU best | GPU 常駐 | GPU コピー込み | コピー込み速度比 |
+|---|---:|---:|---:|---:|
+| Merkle・262,144葉／16 MiB | 13.526 | 4.942 | 5.304 | 2.55 |
+| histogram・64 MiB uniform | 3.212 | 2.129 | 3.061 | 1.05 |
+| compact・16,777,216要素／64 MiB | 2.582 | 4.066 | 5.488 | 0.47 |
+
+大 Merkle と compaction の優劣は同方向だった。histogram のコピー込みは試行3／4のCPU優位から小差のGPU優位へ変わっており、明確な高速化とは扱わない。中規模 Merkle も動作条件で優劣が変わったため、一回の結果から自動配置の固定閾値を決めない。
+
 ## CPU を改善すると結論が変わった
 
 [初回](../measurements/apple-m5-workloads-trial1.json)の compaction は CPU の predicate 分岐が残り、GPU コピー込み1.39倍だった。CPU を分岐なしにして再比較した [試行2](../measurements/apple-m5-workloads-trial2.json)では、その優位が消えた。GCD の chunk 数も増やし、性能コアと効率コアの仕事を細かく配れるようにした。
