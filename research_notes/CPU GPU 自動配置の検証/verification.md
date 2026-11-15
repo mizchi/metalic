@@ -22,10 +22,11 @@ adaptive は Merkle 257葉、hot histogram 257 bytes、compact 65537要素、com
 
 ## 性能の範囲
 
-`just bench-adaptive` を validation 無効で2回実行し、新規履歴で開始。以下の両 snapshot の `sourceHashes` が現在の計測対象ソースに一致することを照合した。
+`just bench-adaptive` を validation 無効で3回実行し、新規履歴で開始。試行1／2の `sourceHashes` は commit `251b136` のソースに一致。試行3は lease の所有期間のコメントと末尾空行だけを修正した後のソースに一致することを照合した。アルゴリズムや配置規則は変えていない。
 
 - [試行1](../../measurements/apple-m5-adaptive-trial1.json)：2026-11-15 14:08:30 UTC。
 - [試行2](../../measurements/apple-m5-adaptive-trial2.json)：2026-11-15 14:09:05 UTC。
+- [試行3](../../measurements/apple-m5-adaptive-trial3.json)：2026-11-15 14:15:05 UTC。最終ソースの再計測。
 
 各5ケース、候補ごとの warmup 1＋保持3で校正。固定3候補と auto を各15件、順序回転して比較。固定候補は learn=false、auto は履歴を更新。Merkle 16件の batch は3 variant ×3 round、variant 順を回転し、各 batch の前に GPU warmup 1件。連続する adaptive は履歴を持ち越すので、独立した同一初期状態の比較ではない。
 

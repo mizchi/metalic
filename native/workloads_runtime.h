@@ -238,7 +238,6 @@ public:
         }
       }
     }
-    return records; // No GPU-backed pointer escapes; the lease is returned now.
+    return records; // No GPU-backed pointer escapes; PreparedWorkload retains the lease.
   }
 };
-

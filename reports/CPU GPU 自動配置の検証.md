@@ -2,7 +2,7 @@
 
 **CPU と GPU の常駐 scheduler を実装し、反復計測から配置を選び、プロファイルを次回起動へ引き継げるようにした。** 対象は先に検証した Merkle SHA-256、histogram256、安定 compaction の3種類。今回の最適化は登録済み計算の配置であり、任意の言語プログラムの自動 GPU 化は含まない。
 
-2026-11-15、Apple M5／10 logical CPU／macOS 26.6.2／MSL 4.0。同じソースで [試行1](../measurements/apple-m5-adaptive-trial1.json)・[試行2](../measurements/apple-m5-adaptive-trial2.json)を保存した。MSL 4.1 と OS 更新は不要だった。
+2026-11-15、Apple M5／10 logical CPU／macOS 26.6.2／MSL 4.0。[試行1](../measurements/apple-m5-adaptive-trial1.json)・[試行2](../measurements/apple-m5-adaptive-trial2.json)は commit `251b136` の同じソース。[試行3](../measurements/apple-m5-adaptive-trial3.json)は lease の所有期間のコメントと末尾空行だけを修正した最終ソースで、処理内容は同じ。MSL 4.1 と OS 更新は不要だった。
 
 ## スケジュールする単位
 
@@ -69,9 +69,13 @@ fingerprint は worker binary、MSL、scheduler 関連ソース、出力・検�
 
 前の [アルゴリズム比較](<CPU GPU アルゴリズムの比較検証.md>)では、大 Merkle の GPU コピー込みは5.304 msで CPU より速かった。今回の交互実行では GPU 17.923 ms、連続投入では約5 ms/件へ変化した。時間の範囲にも検証／IPC の違いがあるが、GPU の投入パターンによる差も大きい。周波数や他負荷を測定・制御していないため、原因を一つに断定しない。固定の「入力何 byte なら GPU」という境界を保存する方法では不十分だった。
 
+試行3では、同じ交互実行の Merkle が CPU 並列13.885 ms／GPU 6.164 msになり、auto は15件すべて GPU を選び5.884 msだった。大 compact は CPU 3.002 ms、histogram は CPU 約0.99 ms。常駐 histogram の固定 CPU 0.948 ms／GPU 0.946 msには10%の差がなく、CPU を継続した。コードの性能改善を行っていない再試行でも GPU の状態が変わり、実測に従って選択結果も変わった。
+
 ## 学習にかかる費用
 
 試行2の常駐 worker 起動は32.290 ms（試行1は34.712 ms）。OS の Metal cache を無効化した cold build の値ではない。校正には3候補それぞれ warmup 1回＋保持3回の計12実行がある。
+
+再ビルド後の試行3では起動388.033 ms、Merkle の準備122.129 ms・校正445.862 msだった。初期化の状態によって起動費も大きく変わるため、32 msを一定の起動費として見積もらない。
 
 | 入力 | 準備 ms | 校正 ms |
 |---|---:|---:|
@@ -93,12 +97,15 @@ Merkle の校正は遅い CPU 単一候補を試す費用が支配する。試�
 |---|---:|---:|---:|
 | 1 | 80.804 | 81.853 | 80.206 |
 | 2 | 80.839 | 80.775 | 80.836 |
+| 3 | 80.623 | 75.003 | 74.060 |
 
-adaptive は概ね CPU 6件＋GPU 10件に配った。両 lane の RPC が重なり、結果も一致した。しかし GPU 固定と概ね同じ時間で、安定した throughput 改善は確認できなかった。単発の速さだけを足し合わせた理想値にはならない。CPU 実行が GPU の帯域や host 発行・消費と競合する可能性があり、独立した仕事でも両方を埋めればよいとは限らない。
+試行1／2の adaptive は概ね CPU 6件＋GPU 10件に配った。両 lane の RPC が重なり、結果も一致した。しかし GPU 固定と概ね同じ時間で、安定した throughput 改善は確認できなかった。単発の速さだけを足し合わせた理想値にはならない。CPU 実行が GPU の帯域や host 発行・消費と競合する可能性があり、独立した仕事でも両方を埋めればよいとは限らない。
 
 試行1の更新後には72.155 msの batch もあったが、3件の中央値は80.206 ms。試行2の GPU 固定にも97.889 msの外れた batch がある。一つの良い／悪い batch だけを選んで速度比を主張しない。3 round は記述的な測定で、統計的な優位を確定する標本数ではない。
 
-再起動後は profile status が `loaded` になり、別 seed の同形状 Merkle を追加校正せず CPU 並列へ配置した。入力そのものを cache して結果を返しているわけではない。
+試行3は CPU 4〜5件＋GPU 11〜12件へ配り、中央値では GPU 固定より約7〜9%短かった。ただし更新後 adaptive の範囲は72.263〜87.398 msで、GPU 固定を超える batch もある。試行1／2の利益がほぼなかった結果も残し、安定した並行実行の利益を確定したとは扱わない。
+
+再起動後は profile status が `loaded` になり、別 seed の同形状 Merkle を追加校正せず試行1／2は CPU 並列、試行3は GPU へ配置した。入力そのものを cache して結果を返しているわけではない。
 
 ## 言語実装へつなぐ範囲
 

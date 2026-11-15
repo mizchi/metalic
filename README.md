@@ -114,7 +114,7 @@ try {
 
 既定上限は受理済み16件、準備済み8 handle、論理予約1 GiB。`runBatch` は上限まで投入して空きを待ち、入力順で結果を返す。直接の `run` が満杯ならエラー。`release` はその handle の受理済み処理を待つ。worker／GPU エラー時は未実行分も失敗させ、別 backend で隠れて再試行しない。既定の履歴ファイルは `build/adaptive-profile.json`。`flush` と `close` で保存を待てる。
 
-学習の `serviceUs` は native の全結果照合、JSON／IPC、CPU 消費を含む。`queueUs` は自 scheduler 内の待ち、`totalUs` はその和、`nativeServiceUs` と `timings` は内訳。初回起動・準備・校正は別に報告する。既知の最速方式より必ず速くなる保証はなく、約16 µsの小処理では IPC／判断費が目立つ。`just bench-adaptive` の [試行1](measurements/apple-m5-adaptive-trial1.json)・[試行2](measurements/apple-m5-adaptive-trial2.json)では大 compaction を CPU に配置し、GPU 固定より速くなった一方、Merkle の連続投入は GPU 固定と概ね同程度だった。
+学習の `serviceUs` は native の全結果照合、JSON／IPC、CPU 消費を含む。`queueUs` は自 scheduler 内の待ち、`totalUs` はその和、`nativeServiceUs` と `timings` は内訳。初回起動・準備・校正は別に報告する。既知の最速方式より必ず速くなる保証はなく、約16 µsの小処理では IPC／判断費が目立つ。`just bench-adaptive` の [試行1](measurements/apple-m5-adaptive-trial1.json)・[試行2](measurements/apple-m5-adaptive-trial2.json)・[試行3](measurements/apple-m5-adaptive-trial3.json)では、大 compaction は CPU、Merkle はその時点の実測に応じ CPU／GPU を選んだ。Merkle の連続投入での並行実行の利益は試行間で変わり、常に高速化する結果にはなっていない。
 
 これは登録した純粋な処理の配置最適化。言語 frontend の自動 CPU 化、任意関数の GPU コード生成、kernel fusion／JIT、実行途中の移動は未実装。
 
