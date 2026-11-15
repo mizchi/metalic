@@ -10,7 +10,12 @@ export interface AstNode {
 export interface ModuleNode extends AstNode { functionId: number; binding: number | null; type: TypeKind }
 export interface Diagnostic { code: ErrorCode; offset: number }
 export type DiagnosticStrategy = 'tree' | 'hierarchical' | 'packed';
-export interface GpuOptions { diagnostics?: DiagnosticStrategy }
+export type BufferStrategy = 'fresh' | 'reuse' | 'selective';
+export interface GpuOptions { diagnostics?: DiagnosticStrategy; buffers?: BufferStrategy; poisonBuffers?: boolean }
+export interface TimingBreakdown {
+  prepareUs: number; acquireUs: number; initializeUs: number;
+  encodeUs: number; submitWaitUs: number; materializeUs: number;
+}
 export const passes = ['Lex', 'Tokenize', 'Structure', 'NormalizeOperators', 'BuildAst', 'ValidateAst'] as const;
 export const modulePasses = [...passes, 'ResolveNames', 'CheckTypes'] as const;
 export interface Parameter { binding: number; begin: number; end: number; type: TypeKind }
@@ -27,6 +32,9 @@ export interface GpuResult extends ParseResult {
   chunkSize: number; setupUs: number; arenaBytes: number;
   samplesUs: number[]; gpuSamplesUs: number[];
   diagnostics: DiagnosticStrategy; diagnosticDispatches: number; mslVersion: string;
+  buffers: BufferStrategy; bufferAllocations: number; initializedBytes: number; poisonedBytes: number;
+  sourceCapacityBytes: number; arenaCapacityBytes: number;
+  timingsUs: TimingBreakdown; timingSamplesUs: TimingBreakdown[]; allocationSamples: number[];
 }
 export interface ModuleResult extends ParseResult { nodes: ModuleNode[]; functions: FunctionDecl[] }
 export interface GpuModuleResult extends GpuResult { nodes: ModuleNode[]; functions: FunctionDecl[] }

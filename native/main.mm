@@ -12,6 +12,8 @@
 #include "passes.h"
 
 static constexpr U32 NONE = 0xffffffffu;
+#include "buffers.h"
+#include "arena.h"
 static_assert(sizeof(Layout)==172 && sizeof(Params)==216,"Unexpected host/Metal scalar ABI layout");
 static_assert((uint64_t(MaxSourceBytes)<<DiagnosticCodeBits)+((1u<<DiagnosticCodeBits)-1)<NONE);
 static double nsPerTick;
@@ -30,14 +32,15 @@ static DiagnosticStrategy parseStrategy(id value) {
   return !value || [value isEqual:@"packed"] ? DPacked : [value isEqual:@"hierarchical"] ? DHierarchical : DTree;
 }
 
-struct ArenaPlan {
-  U32 next=0, limit=0;
-  U32 take(U32 count) {
-    U32 at=next; next+=count;
-    check(!limit || next<=limit,"Arena planning overflow");
-    return at;
-  }
-};
+static NSString* bufferName(BufferStrategy buffers) {
+  return buffers==BufferStrategy::Fresh ? @"fresh" : buffers==BufferStrategy::Reuse ? @"reuse" : @"selective";
+}
+static BufferStrategy parseBuffers(id value) {
+  check(!value || [value isEqual:@"fresh"] || [value isEqual:@"reuse"] || [value isEqual:@"selective"],
+    "Unknown buffer strategy");
+  return [value isEqual:@"selective"] ? BufferStrategy::Selective : [value isEqual:@"reuse"] ? BufferStrategy::Reuse : BufferStrategy::Fresh;
+}
+struct Configuration { DiagnosticStrategy diagnostics; BufferStrategy buffers; };
 
 // Normal tracked command buffers retain their resources. This object and every
 // allocation also stay alive until the ONLY host completion wait has returned.
@@ -45,6 +48,7 @@ class Runtime {
   id<MTLDevice> device;
   id<MTLCommandQueue> queue;
   NSMutableDictionary<NSString*, id<MTLComputePipelineState>>* pipelines;
+  BufferPool pools[2];
 public:
   double setupUs=0;
   Runtime(NSString* directory) {
@@ -85,7 +89,8 @@ public:
   }
   NSString* name() { return device.name; }
 
-  NSDictionary* run(NSString* input, U32 chunk, bool materialize, bool moduleMode, DiagnosticStrategy diagnostics) {
+  NSDictionary* run(NSString* input,U32 chunk,bool materialize,bool moduleMode,DiagnosticStrategy diagnostics,
+      BufferStrategy buffers,bool poisonBuffers) {
     uint64_t start=mach_absolute_time();
     NSData* bytes=[input dataUsingEncoding:NSUTF8StringEncoding];
     check(bytes!=nil,"Source cannot be encoded as UTF-8");
@@ -112,21 +117,20 @@ public:
     l.tree=plan.take(2*treeBase); l.errors=plan.take(diagnostics==DPacked ? 0 : n+1); l.control=plan.take(CCount);
     l.maps0=plan.take(chunks*SCount); l.maps1=plan.take(chunks*SCount);
     U32 total=plan.next+4*cap+1024; plan.limit=total;
-    id<MTLBuffer> source=[device newBufferWithLength:std::max(n,1u) options:MTLResourceStorageModeShared];
-    id<MTLBuffer> arena=[device newBufferWithLength:size_t(total)*4 options:MTLResourceStorageModeShared];
-    check(source!=nil && arena!=nil,"Metal buffer allocation failed");
+    uint64_t planned=mach_absolute_time();
+    BufferPool* pool=buffers==BufferStrategy::Fresh ? nullptr : &pools[buffers==BufferStrategy::Reuse ? 0 : 1];
+    BufferLease lease=acquireBuffers(device,pool,cap,size_t(total)*4);
+    id<MTLBuffer> source=lease.source,arena=lease.arena;
+    uint64_t acquired=mach_absolute_time();
+    size_t poisonedBytes=0;
+    if(poisonBuffers) {
+      memset(source.contents,0xa5,source.length); memset(arena.contents,0xa5,arena.length);
+      poisonedBytes=source.length+arena.length;
+    }
     if(n) memcpy(source.contents,bytes.bytes,n);
     auto memory=(U32*)arena.contents;
-    memset(memory,0,size_t(total)*4);
-    std::fill(memory+l.tokEnd,memory+l.tokEnd+cap,n);
-    for(U32 off:{l.left,l.right,l.parent}) std::fill(memory+off,memory+off+cap,NONE);
-    if(moduleMode) {
-      for(U32 off:{l.nodeOwner,l.nodeBinding}) std::fill(memory+off,memory+off+cap,NONE);
-      std::fill(memory+l.fnRoot,memory+l.fnRoot+MaxFunctions,NONE);
-    }
-    memory[l.control+CRoot]=NONE;
-    memory[l.control+CErrorOffset]=NONE;
-    std::fill(memory+l.control+CGrammarKey,memory+l.control+CTypeKey+1,NONE);
+    size_t initializedBytes=initializeArena(memory,l,n,cap,total,moduleMode,diagnostics,buffers==BufferStrategy::Selective);
+    uint64_t initialized=mach_absolute_time();
 
     id<MTLCommandBuffer> command=[queue commandBuffer];
     id<MTLComputeCommandEncoder> encoder=[command computeCommandEncoder];
@@ -243,7 +247,9 @@ public:
         diagnose();
       }));
     }
-    [encoder endEncoding]; [command commit];
+    [encoder endEncoding];
+    uint64_t encoded=mach_absolute_time();
+    [command commit]; lease.submitted(command);
     U32 hostWaits=0;
     [command waitUntilCompleted]; // No host reads or waits occur between passes.
     hostWaits++;
@@ -260,6 +266,9 @@ public:
       @"dispatches":@(dispatches),@"hostWaits":@(hostWaits),@"chunkSize":@(chunk),
       @"diagnostics":strategyName(diagnostics),@"diagnosticDispatches":@(diagnosticDispatches),
       @"mslVersion":[NSString stringWithFormat:@"%u.%u",memory[l.control+CMetalVersion]/100,(memory[l.control+CMetalVersion]%100)/10],
+      @"buffers":bufferName(buffers),@"bufferAllocations":@(lease.allocations),
+      @"initializedBytes":@(initializedBytes),@"poisonedBytes":@(poisonedBytes),
+      @"sourceCapacityBytes":@(source.length),@"arenaCapacityBytes":@(arena.length),
       @"elapsedUs":@(elapsed(start,finished)),
       @"gpuUs":@((command.GPUEndTime-command.GPUStartTime)*1e6),
       @"arenaBytes":@(size_t(total)*4)} mutableCopy];
@@ -297,6 +306,10 @@ public:
       result[@"root"]=errorCode || moduleMode ? (id)[NSNull null] : nullable(root);
       result[@"diagnostic"]=errorCode ? (id)@{@"code":@(errorCode),@"offset":@(memory[l.control+CErrorOffset])} : (id)[NSNull null];
     }
+    uint64_t materialized=mach_absolute_time();
+    result[@"timingsUs"]=@{@"prepareUs":@(elapsed(start,planned)),@"acquireUs":@(elapsed(planned,acquired)),
+      @"initializeUs":@(elapsed(acquired,initialized)),@"encodeUs":@(elapsed(initialized,encoded)),
+      @"submitWaitUs":@(elapsed(encoded,finished)),@"materializeUs":@(elapsed(finished,materialized))};
     return result;
   }
 };
@@ -323,6 +336,16 @@ int main(int argc,const char** argv) {
       check(strategies.count>0 && strategies.count<=3,"Expected one to three diagnostic strategies");
       check([NSSet setWithArray:strategies].count==strategies.count,"Diagnostic strategies must be distinct");
       for(id value in strategies) parseStrategy(value);
+      id requestedBuffers=request[@"buffers"];
+      NSArray* bufferStrategies=[requestedBuffers isKindOfClass:[NSArray class]] ? requestedBuffers : @[requestedBuffers ?: @"fresh"];
+      check(bufferStrategies.count>0 && bufferStrategies.count<=3,"Expected one to three buffer strategies");
+      check([NSSet setWithArray:bufferStrategies].count==bufferStrategies.count,"Buffer strategies must be distinct");
+      std::vector<Configuration> configurations;
+      for(id value in strategies) for(id storage in bufferStrategies)
+        configurations.push_back({parseStrategy(value),parseBuffers(storage)});
+      id poison=request[@"poisonBuffers"];
+      check(!poison || CFGetTypeID((__bridge CFTypeRef)poison)==CFBooleanGetTypeID(),"poisonBuffers must be a boolean");
+      bool poisonBuffers=[poison boolValue];
       Runtime runtime(@(argv[1]));
       NSMutableArray* results=[NSMutableArray new];
       for(id source in sources) {
@@ -330,25 +353,31 @@ int main(int argc,const char** argv) {
         NSMutableArray* samples=[NSMutableArray new];
         NSMutableArray* gpuSamples=[NSMutableArray new];
         NSMutableArray* last=[NSMutableArray new];
-        for(U32 i=0;i<strategies.count;i++) {
+        NSMutableArray* timings=[NSMutableArray new];
+        NSMutableArray* allocations=[NSMutableArray new];
+        for(U32 i=0;i<configurations.size();i++) {
           [samples addObject:[NSMutableArray new]]; [gpuSamples addObject:[NSMutableArray new]];
+          [timings addObject:[NSMutableArray new]]; [allocations addObject:[NSMutableArray new]];
           [last addObject:[NSNull null]];
         }
         for(U32 run=0;run<repeat;run++) {
           // Rotate order each round, comparing schedules with the same device,
           // library and process rather than timing separate process lifetimes.
-          for(U32 slot=0;slot<strategies.count;slot++) {
-            U32 index=(slot+run)%U32(strategies.count);
+          for(U32 slot=0;slot<configurations.size();slot++) {
+            U32 index=(slot+run)%U32(configurations.size());
             @autoreleasepool {
-              NSDictionary* current=runtime.run(source,chunk,run+1==repeat,moduleMode,parseStrategy(strategies[index]));
+              auto config=configurations[index];
+              NSDictionary* current=runtime.run(source,chunk,run+1==repeat,moduleMode,config.diagnostics,config.buffers,poisonBuffers);
               last[index]=current;
               [samples[index] addObject:current[@"elapsedUs"]]; [gpuSamples[index] addObject:current[@"gpuUs"]];
+              [timings[index] addObject:current[@"timingsUs"]]; [allocations[index] addObject:current[@"bufferAllocations"]];
             }
           }
         }
-        for(U32 i=0;i<strategies.count;i++) {
+        for(U32 i=0;i<configurations.size();i++) {
           NSMutableDictionary* result=[last[i] mutableCopy];
           result[@"samplesUs"]=samples[i]; result[@"gpuSamplesUs"]=gpuSamples[i];
+          result[@"timingSamplesUs"]=timings[i]; result[@"allocationSamples"]=allocations[i];
           result[@"setupUs"]=@(runtime.setupUs);
           [results addObject:result];
         }

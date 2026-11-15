@@ -27,7 +27,7 @@ for(const job of jobs) {
   const expected=job.language==='module' ? parseModuleReference(job.source) : parseReference(job.source);
   const start=performance.now();
   const output=execFileSync(`${root}build/frontend-metal`,[`${root}native`],{
-    input:JSON.stringify({sources:[job.source],language:job.language,chunkSize:64,repeat,diagnostics:strategies}),
+    input:JSON.stringify({sources:[job.source],language:job.language,chunkSize:64,repeat,diagnostics:strategies,buffers:'fresh'}),
     encoding:'utf8',maxBuffer:256*1024*1024,stdio:['pipe','pipe','pipe'],
   });
   const wallUs=(performance.now()-start)*1000;

@@ -16,6 +16,7 @@ just module examples/functions.np
 just validate
 just bench
 just bench-diagnostics
+just bench-buffers
 ```
 
 必要環境は Apple Silicon の Metal GPU、macOS 26以降、対応 Xcode／Metal Toolchain、Node.js 24+、pnpm、just。MSL 4.0 を明示指定し、Apple M5 / macOS 26.6.2 で動作確認した。実行時依存の npm ライブラリはなく、TypeScript と Node の型定義は検査用の開発依存。
@@ -44,6 +45,8 @@ just bench-diagnostics
 `pnpm parse --cpu file.np` は独立した CPU oracle を明示的に使う。`--module --cpu` では関数モジュールの oracle を使う。GPU が使えない場合はエラーにし、暗黙の CPU fallback はしない。`--chunk-size 7` などで字句チャンクを変更できる。
 
 診断集約は `--diagnostics packed`（既定）、`hierarchical`、`tree` で切り替える。TS API では第4引数に `{diagnostics: 'tree'}` 等を渡せる。結果の `mslVersion` は shader が報告した言語バージョン、`diagnosticDispatches` は診断専用 dispatch の件数を表す。
+
+TS API の `{buffers: 'fresh' | 'reuse' | 'selective'}` で、毎回確保、再利用と全初期化、再利用と必要な列だけの初期化を比較できる。再利用は一つの native request 内の複数入力・反復が対象。`timingsUs` は準備・確保・初期化・発行・commit/wait・結果オブジェクト構築の区間を持ち、`bufferAllocations` はその回の Metal buffer 確保数、`initializedBytes` は arena 初期化の CPU 書き込み量を表す。`poisonBuffers: true` は初期化漏れの検証用で、計測時は無効にする。
 
 ## 現在の言語範囲
 
@@ -113,9 +116,9 @@ AST の NodeId は本体の括弧等を除いた token 順。node span はその
 
 ## 検証と計測
 
-`just test` は ABI 生成・ビルド、TypeScript strict 検査、20本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
+`just test` は ABI 生成・ビルド、TypeScript strict 検査、25本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
 
-`just validate` は Metal API/GPU validation を有効にして式4件・モジュール12件を3方式で実行し、計48件の正常系・深い木・複数 threadgroup・異常系を確認する。通常の速度測定とは別に実行する。
+`just validate` は Metal API/GPU validation を有効にして式4件・モジュール13件を診断3方式×buffer3方式で実行し、計153件を確認する。メモリを意図的に汚し、長い入力の後の短い入力やエラー後の正常系も照合する。通常の速度測定とは別に実行する。
 
 `just bench` は3回の warmup 後20回を測り、`build/benchmark.json` に保存する。GPU frontend 時間は確保・初期化・encode/submit・最後の wait を含み、最終 JSON 化は含まない。device interval、library/pipeline setup、プロセス起動・23回の実行と最終 AST の転送を含む batch wall time も分ける。OS の Metal cache は無効化していない。CPU は TypeScript の正しさ確認用 oracle であり、最適化された CPU parser との速度比較ではない。p95 も20標本の参考値。自動 CPU/GPU 選択はまだ実装しない。
 

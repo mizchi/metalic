@@ -20,5 +20,8 @@ bench: build
 bench-diagnostics: build
   pnpm bench:diagnostics
 
+bench-buffers: build
+  pnpm bench:buffers
+
 validate: build
   node scripts/validate-metal.mjs

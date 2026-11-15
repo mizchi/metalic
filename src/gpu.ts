@@ -4,14 +4,18 @@ import type { GpuResult, GpuModuleResult, GpuOptions } from './contract.ts';
 const root=fileURLToPath(new URL('../',import.meta.url));
 function run(sources: readonly string[], chunkSize:number, repeat:number, language:'expression'|'module', options:GpuOptions): GpuResult[] | GpuModuleResult[] {
   const diagnostics=options.diagnostics ?? 'packed';
+  const buffers=options.buffers ?? 'fresh';
+  const poisonBuffers=options.poisonBuffers ?? false;
   if(!['tree','hierarchical','packed'].includes(diagnostics)) throw new TypeError('Unknown diagnostic strategy');
+  if(!['fresh','reuse','selective'].includes(buffers)) throw new TypeError('Unknown buffer strategy');
+  if(typeof poisonBuffers!=='boolean') throw new TypeError('poisonBuffers must be a boolean');
   if (!Array.isArray(sources) || sources.length>4096 || sources.some(s=>typeof s!=='string'))
     throw new TypeError('Expected at most 4096 source strings');
   if (sources.some(s=>Buffer.byteLength(s)>1048576)) throw new RangeError('Source exceeds 1 MiB of UTF-8 bytes');
   if (!Number.isInteger(chunkSize) || chunkSize<1 || chunkSize>1024) throw new RangeError('chunkSize must be 1..1024');
   if (!Number.isInteger(repeat) || repeat<1 || repeat>1000) throw new RangeError('repeat must be 1..1000');
   const result=execFileSync(`${root}build/frontend-metal`,[`${root}native`],{
-    input:JSON.stringify({sources,chunkSize,repeat,language,diagnostics}), encoding:'utf8', maxBuffer:256*1024*1024,
+    input:JSON.stringify({sources,chunkSize,repeat,language,diagnostics,buffers,poisonBuffers}), encoding:'utf8', maxBuffer:256*1024*1024,
     stdio:['pipe','pipe','pipe'],
   });
   return JSON.parse(result);
