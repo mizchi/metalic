@@ -81,7 +81,8 @@ export interface WorkloadSample {
 export interface WorkloadRecord extends WorkloadSpec {
   mode: WorkloadMode; inputBytes: number; inputHash: string;
   resultCount: number; checksum: number; digestHex?: string; output?: number[];
-  verified: boolean; hostWaits: number; dispatches: number; cpuWorkers: number;
+  /** cpuTasks counts GCD chunks, not physical cores or simultaneous threads. */
+  verified: boolean; hostWaits: number; dispatches: number; cpuTasks: number;
   arenaBytes: number; bufferBytes: number; acquireUs: number;
   samples: WorkloadSample[];
 }

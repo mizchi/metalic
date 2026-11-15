@@ -14,7 +14,7 @@ inline U32 nextRandom(U32& state) {
   state^=state<<13; state^=state>>17; state^=state<<5; return state;
 }
 inline U32 workerCount(U32 count,U32 grain,bool parallel,U32 threads) {
-  return parallel ? std::min(threads,std::max((count+grain-1)/grain,1u)) : 1;
+  return parallel ? std::min(threads*4,std::max((count+grain-1)/grain,1u)) : 1;
 }
 template<typename Body> void ranges(U32 count,U32 workers,Body body) {
   auto task=[&](U32 w) { body(U32(uint64_t(count)*w/workers),U32(uint64_t(count)*(w+1)/workers),w); };
@@ -29,7 +29,7 @@ struct CpuWorkload {
   CpuWorkload(const WorkloadJob& job,U32 cores) : threads(cores) {
     output.resize(job.kind==Workload::Merkle ? 8 : job.kind==Workload::Histogram ? 256 : std::max(job.count,1u));
     if(job.kind==Workload::Merkle) { a.resize(size_t(std::max(job.count,1u))*8); b.resize(size_t(std::max((job.count+1)/2,1u))*8); }
-    hist.resize(cores); counts.resize(cores); offsets.resize(cores);
+    hist.resize(cores*4); counts.resize(cores*4); offsets.resize(cores*4);
   }
   void run(const WorkloadJob& job,bool parallel) {
     U32 n=job.count;
@@ -71,7 +71,9 @@ struct CpuWorkload {
     } else {
       workers=workerCount(n,65536,parallel,threads);
       if(workers==1) {
-        U32 out=0; for(U32 i=0;i<n;i++) if((job.input[i]&job.mask)==0) output[out++]=job.input[i];
+        // Always store into available capacity; only selected values advance.
+        // This avoids a hard-to-predict branch for 50% selection.
+        U32 out=0; for(U32 i=0;i<n;i++) { U32 value=job.input[i]; output[out]=value; out+=((value&job.mask)==0); }
         resultCount=out;
       } else {
         ranges(n,workers,[&](U32 begin,U32 end,U32 w) {
@@ -79,7 +81,14 @@ struct CpuWorkload {
         });
         U32 total=0; for(U32 w=0;w<workers;w++) { offsets[w]=total; total+=counts[w]; }
         ranges(n,workers,[&](U32 begin,U32 end,U32 w) {
-          U32 out=offsets[w]; for(U32 i=begin;i<end;i++) if((job.input[i]&job.mask)==0) output[out++]=job.input[i];
+          U32 out=offsets[w],stop=out+counts[w];
+          for(U32 i=begin;i<end;i++) {
+            U32 value=job.input[i];
+            // The monotone guard prevents unselected tail stores from racing
+            // with the next chunk, including chunks with zero selections.
+            if(out<stop) output[out]=value;
+            out+=((value&job.mask)==0);
+          }
         });
         resultCount=total;
       }

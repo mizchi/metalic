@@ -171,7 +171,7 @@ public:
           @"encodeUs":@(gpu ? elapsed(prepared,encoded) : 0),@"waitUs":@(gpu ? elapsed(encoded,computed) : 0),
           @"computeUs":@(gpu ? gpuUs : elapsed(start,computed)),@"gpuUs":@(gpuUs),@"consumeUs":@(elapsed(computed,consumed))}];
         result[@"resultCount"]=@(count); result[@"checksum"]=@(checksum); result[@"hostWaits"]=@(gpu ? 1 : 0);
-        result[@"dispatches"]=@(gpu ? plan.dispatches.size() : 0); result[@"cpuWorkers"]=@(gpu ? 0 : cpu.workers);
+        result[@"dispatches"]=@(gpu ? plan.dispatches.size() : 0); result[@"cpuTasks"]=@(gpu ? 0 : cpu.workers);
         if(job.kind==Workload::Merkle) result[@"digestHex"]=hex(output,32);
         if(includeOutput && round+1==warmups+samples) {
           NSMutableArray* data=[NSMutableArray new]; for(U32 j=0;j<count;j++) [data addObject:@(output[j])];
