@@ -35,6 +35,9 @@ bench-workloads: build
 bench-adaptive: build
   pnpm bench:adaptive
 
+bench-fit *args: build
+  pnpm bench:fit {{args}}
+
 validate: build
   node scripts/validate-metal.mjs
   node scripts/validate-workloads.mjs

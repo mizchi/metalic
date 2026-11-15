@@ -62,6 +62,24 @@ kernel void sha_empty(device const uint* input [[buffer(0)]],device uint* arena 
   for(uint j=0;j<8;j++) arena[p.outputOffset+j]=wl_swap(s[j]);
 }
 
+kernel void tea_blocks(device const uint* input [[buffer(0)]],device uint* arena [[buffer(1)]],
+    constant WorkloadParams& p [[buffer(2)]],uint i [[thread_position_in_grid]]) {
+  if(i>=p.n) return;
+  uint y=input[2*i],z=input[2*i+1],sum=0;
+  for(uint round=0;round<32;round++) {
+    sum+=0x9e3779b9u;
+    y+=((z<<4)^(z+sum)^(z>>5));z+=((y<<4)^(y+sum)^(y>>5));
+  }
+  arena[p.outputOffset+2*i]=y;arena[p.outputOffset+2*i+1]=z;
+}
+kernel void pointer_chase(device const uint* input [[buffer(0)]],device uint* arena [[buffer(1)]],
+    constant WorkloadParams& p [[buffer(2)]],uint i [[thread_position_in_grid]]) {
+  if(i) return;
+  uint at=0,hash=2166136261u;
+  for(uint step=0;step<p.n;step++) { at=input[at];hash=(hash^at)*16777619u; }
+  arena[p.outputOffset]=at;arena[p.outputOffset+1]=hash;
+}
+
 kernel void histogram_partials(device const uchar* input [[buffer(0)]],device uint* arena [[buffer(1)]],
     constant WorkloadParams& p [[buffer(2)]],uint t [[thread_index_in_threadgroup]],
     uint group [[threadgroup_position_in_grid]],uint sid [[simdgroup_index_in_threadgroup]]) {

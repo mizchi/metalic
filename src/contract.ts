@@ -64,7 +64,7 @@ export interface GpuSummary extends GpuMetrics {
 export interface ModuleResult extends ParseResult { nodes: ModuleNode[]; functions: FunctionDecl[] }
 export interface GpuModuleResult extends GpuResult { nodes: ModuleNode[]; functions: FunctionDecl[] }
 
-export type WorkloadAlgorithm = 'merkle-sha256' | 'histogram256' | 'compact-u32';
+export type WorkloadAlgorithm = 'merkle-sha256' | 'histogram256' | 'compact-u32' | 'tea32' | 'pointer-chase';
 export type WorkloadMode = 'cpu-serial' | 'cpu-parallel' | 'gpu-resident' | 'gpu-upload';
 export interface WorkloadSpec {
   algorithm: WorkloadAlgorithm; count: number; seed?: number;
@@ -122,4 +122,14 @@ export interface AdaptiveResult {
   verified: boolean; checksum: number; resultCount: number; digestHex?: string;
   serviceUs: number; queueUs: number; totalUs: number; nativeServiceUs: number;
   contended: boolean; workerPid: number; timings: WorkloadSample;
+}
+
+export interface FitSample { mode: WorkloadMode; serviceUs: number; apiUs: number; reason?: AdaptiveReason }
+export interface FitOptions { relativeTolerance: number; absoluteToleranceUs: number; minControlSamples: number }
+export interface FitAssessment {
+  family: 'cpu' | 'gpu' | 'ambiguous'; referenceMode: WorkloadMode;
+  competitive: WorkloadMode[];
+  controls: Partial<Record<WorkloadMode,{count:number;p25Us:number;p50Us:number;p75Us:number;apiP50Us:number}>>;
+  count: number; steadyCount: number; fitRate: number; steadyFitRate: number;
+  estimatedRegret: number; apiSlowdown: number; autoApiP50Us: number;
 }

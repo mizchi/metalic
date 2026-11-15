@@ -63,5 +63,7 @@ export const WorkloadLimit = {
   MaxCompactValues: 16777216,
   MaxWorkloadJobs: 64,
   MaxWorkloadOutput: 8192,
+  MaxTeaBlocks: 8388608,
+  MaxChaseNodes: 65536,
 } as const;
 export type WorkloadLimit = typeof WorkloadLimit[keyof typeof WorkloadLimit];

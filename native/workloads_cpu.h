@@ -2,7 +2,7 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <array>
 
-enum class Workload { Merkle, Histogram, Compact };
+enum class Workload { Merkle, Histogram, Compact, Tea, Chase };
 struct WorkloadJob {
   Workload kind;
   U32 count,seed,mask;
@@ -22,12 +22,23 @@ template<typename Body> void ranges(U32 count,U32 workers,Body body) {
   else dispatch_apply(workers,dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^(size_t w) { task(U32(w)); });
 }
 struct alignas(64) HistogramScratch { U32 bins[4*256]; };
+// TEA's 32 cycles with a fixed all-zero 128-bit key. CPU uses four blocks per
+// NEON vector; the tail and independent test oracle also exercise scalar math.
+template<typename Word> inline void tea32(Word& y,Word& z) {
+  U32 sum=0;
+  for(U32 round=0;round<32;round++) {
+    sum+=0x9e3779b9u;
+    y+=((z<<4)^(z+sum)^(z>>5)); z+=((y<<4)^(y+sum)^(y>>5));
+  }
+}
+typedef U32 U32x4 __attribute__((ext_vector_type(4)));
 struct CpuWorkload {
   std::vector<U32> output,a,b,counts,offsets;
   std::vector<HistogramScratch> hist;
   U32 resultCount=0,workers=1,threads;
   CpuWorkload(const WorkloadJob& job,U32 cores) : threads(cores) {
-    output.resize(job.kind==Workload::Merkle ? 8 : job.kind==Workload::Histogram ? 256 : std::max(job.count,1u));
+    output.resize(job.kind==Workload::Merkle ? 8 : job.kind==Workload::Histogram ? 256 :
+      job.kind==Workload::Tea ? std::max(job.count*2,1u) : job.kind==Workload::Chase ? 2 : std::max(job.count,1u));
     if(job.kind==Workload::Merkle) { a.resize(size_t(std::max(job.count,1u))*8); b.resize(size_t(std::max((job.count+1)/2,1u))*8); }
     hist.resize(cores*4); counts.resize(cores*4); offsets.resize(cores*4);
   }
@@ -68,6 +79,23 @@ struct CpuWorkload {
         output[i]=sum;
       }
       resultCount=256;
+    } else if(job.kind==Workload::Tea) {
+      workers=workerCount(n,4096,parallel,threads);
+      ranges(n,workers,[&](U32 begin,U32 end,U32) {
+        U32 i=begin;
+        for(;end-i>=4;i+=4) {
+          U32x4 y={job.input[2*i],job.input[2*i+2],job.input[2*i+4],job.input[2*i+6]};
+          U32x4 z={job.input[2*i+1],job.input[2*i+3],job.input[2*i+5],job.input[2*i+7]};
+          tea32(y,z);
+          for(U32 lane=0;lane<4;lane++) { output[2*(i+lane)]=y[lane];output[2*(i+lane)+1]=z[lane]; }
+        }
+        for(;i<end;i++) { U32 y=job.input[2*i],z=job.input[2*i+1];tea32(y,z);output[2*i]=y;output[2*i+1]=z; }
+      });
+      resultCount=2*n;
+    } else if(job.kind==Workload::Chase) {
+      workers=1; U32 at=0,hash=2166136261u;
+      for(U32 step=0;step<n;step++) { at=job.input[at];hash=(hash^at)*16777619u; }
+      output[0]=at;output[1]=hash;resultCount=2;
     } else {
       workers=workerCount(n,65536,parallel,threads);
       if(workers==1) {

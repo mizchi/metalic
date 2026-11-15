@@ -17,7 +17,8 @@
     "bench:scheduling": "node scripts/bench-scheduling.ts",
     "bench:cooperation": "node scripts/bench-cooperation.ts",
     "bench:workloads": "node scripts/bench-workloads.ts",
-    "bench:adaptive": "node scripts/bench-adaptive.ts"
+    "bench:adaptive": "node scripts/bench-adaptive.ts",
+    "bench:fit": "node scripts/bench-fit.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

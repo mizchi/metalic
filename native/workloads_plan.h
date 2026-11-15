@@ -30,6 +30,12 @@ struct WorkloadPlan {
       output=take(256); resultCount=256;
       add(@"histogram_partials",groups*256,{n,0,partial,0,groups,0,0,0},groups);
       add(@"histogram_finish",256,{n,partial,output,0,groups,0,0,0});
+    } else if(job.kind==Workload::Tea) {
+      output=take(n*2);resultCount=n*2;
+      add(@"tea_blocks",std::max(n,1u),{n,0,output,0,0,0,0,0});
+    } else if(job.kind==Workload::Chase) {
+      output=take(2);resultCount=2;
+      add(@"pointer_chase",1,{n,0,output,0,0,0,0,0});
     } else {
       output=take(n); U32 ranks=take(n),groups=std::max((n+255)/256,1u),sums=take(groups);
       add(@"compact_scan",std::max(n,1u),{n,0,ranks,sums,0,job.mask,0,0});

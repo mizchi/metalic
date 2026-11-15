@@ -9,7 +9,8 @@ const scheduler=await AdaptiveScheduler.open({profilePath:join(directory,'profil
 let executions=0;
 try {
   const jobs=[{algorithm:'merkle-sha256',count:257},{algorithm:'histogram256',count:257,distribution:'hot'},
-    {algorithm:'compact-u32',count:65537},{algorithm:'compact-u32',count:0}];
+    {algorithm:'compact-u32',count:65537},{algorithm:'compact-u32',count:0},
+    {algorithm:'tea32',count:4097},{algorithm:'pointer-chase',count:257}];
   const handles=[];
   for(const job of jobs) handles.push(await scheduler.prepare(job));
   for(const h of handles) {

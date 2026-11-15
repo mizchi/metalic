@@ -1,6 +1,7 @@
 import { WorkloadLimit as L } from './schema.ts';
 import type { WorkloadSpec } from './contract.ts';
-const limits:Record<string,number>={'merkle-sha256':L.MaxMerkleLeaves,histogram256:L.MaxHistogramBytes,'compact-u32':L.MaxCompactValues};
+const limits:Record<string,number>={'merkle-sha256':L.MaxMerkleLeaves,histogram256:L.MaxHistogramBytes,'compact-u32':L.MaxCompactValues,
+  tea32:L.MaxTeaBlocks,'pointer-chase':L.MaxChaseNodes};
 export function workloadSpec(spec:WorkloadSpec):Readonly<WorkloadSpec> {
   if(!spec||!Object.hasOwn(limits,spec.algorithm)) throw new TypeError('Unknown workload algorithm');
   if(!Number.isInteger(spec.count)||spec.count<0||spec.count>limits[spec.algorithm]) throw new RangeError('Invalid workload count');

@@ -19,7 +19,7 @@ const records=result.records.map(r=>({...r,p50Us:quantile(r.samples.map(s=>s.ela
   consumeP50Us:quantile(r.samples.map(s=>s.consumeUs),.5)}));
 const sourcePaths=['native/contract.h','native/buffers.h','native/workloads.mm','native/workloads_runtime.h','native/workloads.metal',
   'native/workloads_cpu.h','native/workloads_plan.h','scripts/build.mjs','scripts/bench-workloads.ts',
-  'src/schema.ts','src/contract.ts','src/workloads.ts'];
+  'src/schema.ts','src/contract.ts','src/workloads.ts','src/workload-spec.ts'];
 const output={measuredAt:new Date().toISOString(),node:process.version,
   macOS:execFileSync('sw_vers',['-productVersion'],{encoding:'utf8'}).trim(),
   compiler:execFileSync('xcrun',['clang++','--version'],{encoding:'utf8'}).split('\n')[0],

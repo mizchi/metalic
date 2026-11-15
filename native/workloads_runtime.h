@@ -43,6 +43,8 @@ static WorkloadJob parseJob(NSDictionary* spec,bool generate=true) {
   Workload kind; U32 limit;
   if([name isEqual:@"merkle-sha256"]) { kind=Workload::Merkle; limit=MaxMerkleLeaves; }
   else if([name isEqual:@"histogram256"]) { kind=Workload::Histogram; limit=MaxHistogramBytes; }
+  else if([name isEqual:@"tea32"]) { kind=Workload::Tea; limit=MaxTeaBlocks; }
+  else if([name isEqual:@"pointer-chase"]) { kind=Workload::Chase; limit=MaxChaseNodes; }
   else { check([name isEqual:@"compact-u32"],"Unknown workload algorithm"); kind=Workload::Compact; limit=MaxCompactValues; }
   check(spec[@"count"]!=nil,"Missing workload count");
   U32 n=number(spec[@"count"],0,0,limit,"Invalid workload count");
@@ -50,13 +52,17 @@ static WorkloadJob parseJob(NSDictionary* spec,bool generate=true) {
   check(!distribution || [distribution isEqual:@"uniform"] || [distribution isEqual:@"hot"],"Unknown distribution");
   bool hot=[distribution isEqual:@"hot"];
   check(!hot || kind==Workload::Histogram,"hot distribution requires histogram256");
-  size_t bytes=size_t(n)*(kind==Workload::Merkle ? 64 : kind==Workload::Compact ? 4 : 1);
+  size_t bytes=size_t(n)*(kind==Workload::Merkle ? 64 : kind==Workload::Tea ? 8 : kind==Workload::Histogram ? 1 : 4);
   WorkloadJob job{kind,n,number(spec[@"seed"],0x12345678,0,0xffffffffu,"seed must be u32"),
     number(spec[@"mask"],1,0,0xffffffffu,"mask must be u32"),hot,bytes,{}};
   if(!generate) return job;
   job.input.resize(std::max((bytes+3)/4,size_t(1)));
   U32 state=job.seed;
-  if(kind==Workload::Compact) for(U32 i=0;i<n;i++) job.input[i]=nextRandom(state);
+  if(kind==Workload::Chase) {
+    // Insert each node into one cycle. No second permutation allocation.
+    for(U32 i=1;i<n;i++) { U32 at=nextRandom(state)%i;job.input[i]=job.input[at];job.input[at]=i; }
+  } else if(kind==Workload::Compact || kind==Workload::Tea)
+    for(size_t i=0;i<bytes/4;i++) job.input[i]=nextRandom(state);
   else {
     auto data=reinterpret_cast<unsigned char*>(job.input.data());
     for(size_t i=0;i<bytes;i++) data[i]=hot ? 7 : nextRandom(state)&255;
@@ -88,7 +94,7 @@ struct PreparedWorkload {
   }
   NSString* feature() const {
     if(!job.count) return @"empty";
-    if(job.kind==Workload::Merkle) return @"fixed";
+    if(job.kind==Workload::Merkle || job.kind==Workload::Tea || job.kind==Workload::Chase) return @"fixed";
     if(job.kind==Workload::Histogram) {
       uint64_t peak=*std::max_element(expected.begin(),expected.end());
       return peak*4>=job.count ? @"skewed" : peak*64>=job.count ? @"mixed" : @"balanced";
@@ -101,7 +107,8 @@ struct PreparedWorkload {
 
 inline size_t workloadEstimate(NSDictionary* spec,U32 threads,bool gpu) {
   auto job=parseJob(spec,false); WorkloadPlan plan(job);
-  size_t output=job.kind==Workload::Merkle ? 32 : job.kind==Workload::Histogram ? 1024 : size_t(std::max(job.count,1u))*4;
+  size_t output=job.kind==Workload::Merkle ? 32 : job.kind==Workload::Histogram ? 1024 :
+    job.kind==Workload::Tea ? size_t(std::max(job.count*2,1u))*4 : job.kind==Workload::Chase ? 8 : size_t(std::max(job.count,1u))*4;
   size_t bytes=std::max((job.inputBytes+3)/4,size_t(1))*4+2*output+
     threads*4*(sizeof(HistogramScratch)+8)+16384;
   if(job.kind==Workload::Merkle) bytes+=size_t(std::max(job.count,1u)+std::max((job.count+1)/2,1u))*32;
@@ -133,7 +140,7 @@ public:
     check(library!=nil,error ? error.localizedDescription.UTF8String : "Workload shader compilation failed");
     pipelines=[NSMutableDictionary new];
     for(NSString* name in @[@"sha_leaves",@"sha_parents",@"sha_empty",@"histogram_partials",@"histogram_finish",
-        @"compact_scan",@"scan_values",@"workload_scan_add",@"compact_scatter"]) {
+        @"compact_scan",@"scan_values",@"workload_scan_add",@"compact_scatter",@"tea_blocks",@"pointer_chase"]) {
       auto pso=[device newComputePipelineStateWithFunction:[library newFunctionWithName:name] error:&error];
       check(pso!=nil,error ? error.localizedDescription.UTF8String : "Missing workload kernel");
       check(pso.threadExecutionWidth==32 && pso.maxTotalThreadsPerThreadgroup>=256,
@@ -166,6 +173,7 @@ public:
     auto& job=state.job; auto& cpu=state.cpu; auto& plan=state.plan; auto& expected=state.expected;
     auto spec=state.spec;
     check(!includeOutput || job.kind!=Workload::Compact || job.count<=MaxWorkloadOutput,"Full output exceeds 8192 elements");
+    check(!includeOutput || job.kind!=Workload::Tea || job.count<=MaxWorkloadOutput/2,"Full output exceeds 8192 elements");
     U32 expectedCount=U32(expected.size());
     id<MTLBuffer> source=state.lease ? state.lease->source : nil,arenaBuffer=state.lease ? state.lease->arena : nil;
     auto arena=static_cast<U32*>(arenaBuffer.contents);

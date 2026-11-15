@@ -7,6 +7,8 @@ const jobs=[
   ...[0,1,257,4097,1048576].flatMap(count=>['uniform','hot'].map(distribution=>({algorithm:'histogram256',count,distribution}))),
   ...[0,1,255,256,257,65537].map(count=>({algorithm:'compact-u32',count})),
   {algorithm:'compact-u32',count:4097,mask:0},{algorithm:'compact-u32',count:4097,mask:0xffffffff},
+  ...[0,1,3,255,256,257,4097].map(count=>({algorithm:'tea32',count})),
+  ...[0,1,3,257,4097].map(count=>({algorithm:'pointer-chase',count})),
 ];
 const result=spawnSync(`${root}build/workloads-metal`,[`${root}native`],{
   input:JSON.stringify({jobs,warmups:0,samples:2,poisonBuffers:true}),encoding:'utf8',maxBuffer:16*1024*1024,

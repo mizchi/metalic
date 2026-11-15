@@ -54,7 +54,8 @@ struct Params {
 
 enum WorkloadLimit : U32 {
   MaxMerkleLeaves = 1048576, MaxHistogramBytes = 67108864,
-  MaxCompactValues = 16777216, MaxWorkloadJobs = 64, MaxWorkloadOutput = 8192
+  MaxCompactValues = 16777216, MaxWorkloadJobs = 64, MaxWorkloadOutput = 8192,
+  MaxTeaBlocks = 8388608, MaxChaseNodes = 65536
 };
 // Workload bindings: 0 = immutable input bytes; 1 = U32 arena; 2 = these scalars.
 // Arena offsets are U32 elements. All arithmetic outputs are exact unsigned ints.
