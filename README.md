@@ -1,5 +1,7 @@
 # Metalic
 
+> **Hobby and highly experimental.** 趣味で開発している、非常に実験的なプロジェクトです。
+
 UTF-8 ソースからトークン列と flat AST を **Metal GPU 上で構築する**、macOS 専用の小さなフロントエンド。関数モジュールでは引数の名前解決と `u32`／`str` の型検査も GPU で行う。Node.js は入力と最終結果の表示、Objective-C++ はバッファ確保とコマンド発行を担当する。GPU 経路は CPU パーサを呼ばない。Bend を参考にした独立の実験言語であり、Bend ソースをコンパイルするものではない。
 
 Bend 内で作成した試作とリサーチを `mizchi/metalic` に切り出した。Bend の checkout や runtime はビルド・実行に不要。
