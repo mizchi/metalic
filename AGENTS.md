@@ -31,3 +31,5 @@
 - 論文・著者解説・公開実装・提案を区別し、Metal で実証されていない性能を断定しない。
 - `measurements/` は保存時点の計測。ソースを変えた後も過去の hash を書き換えず、新しい記録を作る。
 - TypeScript の CPU oracle を最適化された CPU 性能 baseline として扱わない。
+- アルゴリズム実験は `native/workloads*` と `src/workloads.ts`。ABI は同じ `contract.h` の `WorkloadParams` が正本。CPU の単一／GCD 並列の速い方と比べ、GPU device interval だけを全体速度にしない。
+- CPU 並列 compaction は選択済み範囲の末尾を超えて書かない。分岐なしの上書きを使う場合も、次 chunk の出力を壊さない guard を保持する。

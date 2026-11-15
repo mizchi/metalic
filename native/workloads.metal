@@ -19,7 +19,6 @@ inline void wl_init(thread uint* s) {
 }
 inline void wl_compress(thread uint* s,thread uint* w) {
   uint a=s[0],b=s[1],c=s[2],d=s[3],e=s[4],f=s[5],g=s[6],h=s[7];
-#pragma unroll
   for(uint t=0;t<64;t++) {
     if(t>=16) {
       uint x=w[(t-15)&15],y=w[(t-2)&15];
@@ -65,19 +64,12 @@ kernel void sha_empty(device const uint* input [[buffer(0)]],device uint* arena 
 
 kernel void histogram_partials(device const uchar* input [[buffer(0)]],device uint* arena [[buffer(1)]],
     constant WorkloadParams& p [[buffer(2)]],uint t [[thread_index_in_threadgroup]],
-    uint group [[threadgroup_position_in_grid]],uint sid [[simdgroup_index_in_threadgroup]],
-    uint lane [[thread_index_in_simdgroup]]) {
+    uint group [[threadgroup_position_in_grid]],uint sid [[simdgroup_index_in_threadgroup]]) {
   threadgroup atomic_uint bins[8*256];
   for(uint j=t;j<8*256;j+=256) atomic_store_explicit(bins+j,0,memory_order_relaxed);
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  for(uint base=group*256;base<p.n;base+=p.groups*256) {
-    uint i=base+t,value=i<p.n ? uint(input[i]) : 256;
-    uint low=simd_min(value),high=simd_max(value);
-    if(low==high) {
-      uint amount=simd_sum(uint(i<p.n));
-      if(lane==0 && low<256) atomic_fetch_add_explicit(bins+sid*256+low,amount,memory_order_relaxed);
-    } else if(i<p.n) atomic_fetch_add_explicit(bins+sid*256+value,1,memory_order_relaxed);
-  }
+  for(uint i=group*256+t;i<p.n;i+=p.groups*256)
+    atomic_fetch_add_explicit(bins+sid*256+input[i],1,memory_order_relaxed);
   threadgroup_barrier(mem_flags::mem_threadgroup);
   uint sum=0; for(uint j=0;j<8;j++) sum+=atomic_load_explicit(bins+j*256+t,memory_order_relaxed);
   arena[p.outputOffset+group*256+t]=sum;

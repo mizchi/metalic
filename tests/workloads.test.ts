@@ -60,12 +60,16 @@ test('stable compaction preserves order across scan levels and all/none selectio
     assert.deepEqual(r.output,expected); assert.equal(r.resultCount,expected.length);
     assert.equal(r.checksum,checksum(expected)); assert.equal(r.verified,true);
   });
-  const [large]=runWorkloads([{algorithm:'compact-u32',count:65537}],{warmups:0,samples:1,
-    modes:['gpu-upload'],poisonBuffers:true}).records;
-  const data=input({algorithm:'compact-u32',count:65537}),values=[];
-  for(let i=0;i<65537;i++) { const v=data.readUInt32LE(4*i); if((v&1)===0) values.push(v); }
-  assert.equal(large.verified,true); assert.equal(large.hostWaits,1);
-  assert.equal(large.resultCount,values.length); assert.equal(large.checksum,checksum(values));
+  const largeJobs:WorkloadSpec[]=[{algorithm:'compact-u32',count:65537},
+    {algorithm:'compact-u32',count:65537,mask:0xffffffff},{algorithm:'compact-u32',count:65537,seed:0}];
+  const largeResults=runWorkloads(largeJobs,{warmups:0,samples:2,poisonBuffers:true}).records;
+  largeResults.forEach((large,i)=> {
+    const job=largeJobs[Math.floor(i/4)],data=input(job),values=[];
+    for(let j=0;j<job.count;j++) { const v=data.readUInt32LE(4*j); if((v&(job.mask??1))===0) values.push(v); }
+    assert.equal(large.verified,true);
+    if(large.mode.startsWith('gpu')) assert.equal(large.hostWaits,1);
+    assert.equal(large.resultCount,values.length); assert.equal(large.checksum,checksum(values));
+  });
 });
 
 test('workload contracts reject invalid input before native execution',()=> {
