@@ -9,7 +9,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
-    "docs:verify": "node docs/metalic-lessons/examples/verify-evidence.mjs --check-prose",
+    "docs:verify": "node scripts/verify-docs.mjs",
     "test": "node --test tests/*.test.ts",
     "parse": "node src/cli.ts",
     "bench": "node scripts/bench.ts",
