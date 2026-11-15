@@ -12,7 +12,8 @@
 #include "passes.h"
 
 static constexpr U32 NONE = 0xffffffffu;
-static_assert(sizeof(Layout)==172 && sizeof(Params)==208,"Unexpected host/Metal scalar ABI layout");
+static_assert(sizeof(Layout)==172 && sizeof(Params)==216,"Unexpected host/Metal scalar ABI layout");
+static_assert((uint64_t(MaxSourceBytes)<<DiagnosticCodeBits)+((1u<<DiagnosticCodeBits)-1)<NONE);
 static double nsPerTick;
 static double elapsed(uint64_t a, uint64_t b) { return (b-a)*nsPerTick/1000.0; }
 static void check(bool condition, const std::string& message) {
@@ -20,6 +21,14 @@ static void check(bool condition, const std::string& message) {
 }
 static U32 powerOfTwo(U32 n) { U32 v=1; while(v<n) v*=2; return v; }
 static id nullable(U32 n) { return n==NONE ? (id)[NSNull null] : (id)@(n); }
+static NSString* strategyName(DiagnosticStrategy strategy) {
+  return strategy==DTree ? @"tree" : strategy==DHierarchical ? @"hierarchical" : @"packed";
+}
+static DiagnosticStrategy parseStrategy(id value) {
+  check(!value || [value isEqual:@"tree"] || [value isEqual:@"hierarchical"] || [value isEqual:@"packed"],
+    "Unknown diagnostic strategy");
+  return !value || [value isEqual:@"packed"] ? DPacked : [value isEqual:@"hierarchical"] ? DHierarchical : DTree;
+}
 
 struct ArenaPlan {
   U32 next=0, limit=0;
@@ -56,12 +65,15 @@ public:
       encoding:NSUTF8StringEncoding error:&error];
     check(module!=nil,"Cannot read module kernels");
     source=[source stringByAppendingString:module];
-    id<MTLLibrary> library=[device newLibraryWithSource:source options:nil error:&error];
+    MTLCompileOptions* options=[MTLCompileOptions new];
+    options.languageVersion=MTLLanguageVersion4_0;
+    id<MTLLibrary> library=[device newLibraryWithSource:source options:options error:&error];
     check(library!=nil, error ? error.localizedDescription.UTF8String : "Metal library compilation failed");
     pipelines=[NSMutableDictionary new];
     for (NSString* name in @[@"lex_summarize",@"lex_compose",@"lex_mark",@"scan_blocks",@"scan_add",
         @"tokenize",@"paren_deltas",@"validate_structure",@"normalize_operators",@"scatter_nodes",
         @"rmq_seed",@"rmq_level",@"build_ast",@"validate_ast",@"error_seed",@"error_level",@"error_publish",
+        @"error_reduce",@"error_publish_min",@"error_publish_packed",
         @"mark_functions",@"index_functions",@"parse_function_headers",@"classify_function_tokens",
         @"validate_function_bodies",@"resolve_declarations",@"resolve_names",@"seed_types",@"check_types",@"check_returns"]) {
       id<MTLComputePipelineState> pso=[device newComputePipelineStateWithFunction:[library newFunctionWithName:name] error:&error];
@@ -73,11 +85,11 @@ public:
   }
   NSString* name() { return device.name; }
 
-  NSDictionary* run(NSString* input, U32 chunk, bool materialize, bool moduleMode) {
+  NSDictionary* run(NSString* input, U32 chunk, bool materialize, bool moduleMode, DiagnosticStrategy diagnostics) {
     uint64_t start=mach_absolute_time();
     NSData* bytes=[input dataUsingEncoding:NSUTF8StringEncoding];
     check(bytes!=nil,"Source cannot be encoded as UTF-8");
-    check(bytes.length<=1048576,"Prototype input limit is 1 MiB of UTF-8 bytes");
+    check(bytes.length<=MaxSourceBytes,"Prototype input limit is 1 MiB of UTF-8 bytes");
     U32 n=U32(bytes.length), cap=std::max(n,1u);
     U32 chunks=std::max((n+chunk-1)/chunk,1u), treeBase=powerOfTwo(n+1);
     ArenaPlan plan;
@@ -97,7 +109,7 @@ public:
       l.fnParams=plan.take(MaxFunctions*MaxParameters);
     }
 #undef COLUMN
-    l.tree=plan.take(2*treeBase); l.errors=plan.take(n+1); l.control=plan.take(CCount);
+    l.tree=plan.take(2*treeBase); l.errors=plan.take(diagnostics==DPacked ? 0 : n+1); l.control=plan.take(CCount);
     l.maps0=plan.take(chunks*SCount); l.maps1=plan.take(chunks*SCount);
     U32 total=plan.next+4*cap+1024; plan.limit=total;
     id<MTLBuffer> source=[device newBufferWithLength:std::max(n,1u) options:MTLResourceStorageModeShared];
@@ -114,18 +126,19 @@ public:
     }
     memory[l.control+CRoot]=NONE;
     memory[l.control+CErrorOffset]=NONE;
+    std::fill(memory+l.control+CGrammarKey,memory+l.control+CTypeKey+1,NONE);
 
     id<MTLCommandBuffer> command=[queue commandBuffer];
     id<MTLComputeCommandEncoder> encoder=[command computeCommandEncoder];
     [encoder setBuffer:source offset:0 atIndex:0];
     [encoder setBuffer:arena offset:0 atIndex:1];
-    U32 dispatches=0;
-    Params base{l,n,cap,0,0,0,0,0,chunk,U32(moduleMode)};
-    auto dispatch=[&](NSString* kernel,U32 size,Params p) {
+    U32 dispatches=0, diagnosticDispatches=0;
+    Params base{l,n,cap,0,0,0,0,0,chunk,U32(moduleMode),U32(diagnostics),0};
+    auto dispatch=[&](NSString* kernel,U32 size,Params p,U32 groups=0) {
       p.size=size;
       [encoder setComputePipelineState:pipelines[kernel]];
       [encoder setBytes:&p length:sizeof(p) atIndex:2];
-      [encoder dispatchThreadgroups:MTLSizeMake((size+255)/256,1,1)
+      [encoder dispatchThreadgroups:MTLSizeMake(groups ? groups : (size+255)/256,1,1)
           threadsPerThreadgroup:MTLSizeMake(256,1,1)];
       [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
       dispatches++;
@@ -142,12 +155,29 @@ public:
       }
     };
     auto diagnose=[&]() {
-      Params p=base; p.a=treeBase;
-      dispatch(@"error_seed",treeBase,p);
-      for(U32 level=treeBase/2;level;level/=2) {
-        p=base; p.a=level; dispatch(@"error_level",level,p);
+      U32 before=dispatches;
+      if(diagnostics==DPacked) {
+        dispatch(@"error_publish_packed",1,base);
+      } else if(diagnostics==DHierarchical) {
+        U32 groups=std::min((n+1+255)/256,256u);
+        Params p=base; p.a=l.errors; p.b=l.tree; p.c=1; p.step=groups*256;
+        dispatch(@"error_reduce",n+1,p,groups);
+        U32 key=l.tree;
+        if(groups>1) {
+          key=l.tree+groups;
+          p=base; p.a=l.tree; p.b=key; p.step=256;
+          dispatch(@"error_reduce",groups,p);
+        }
+        p=base; p.a=key; dispatch(@"error_publish_min",1,p);
+      } else {
+        Params p=base; p.a=treeBase;
+        dispatch(@"error_seed",treeBase,p);
+        for(U32 level=treeBase/2;level;level/=2) {
+          p=base; p.a=level; dispatch(@"error_level",level,p);
+        }
+        dispatch(@"error_publish",1,base);
       }
-      dispatch(@"error_publish",1,base);
+      diagnosticDispatches+=dispatches-before;
     };
     // Logical nanopasses; physical scan/reduction dispatches are internal.
     NSArray* names=@[@"Lex",@"Tokenize",@"Structure",@"NormalizeOperators",@"BuildAst",@"ValidateAst"];
@@ -200,11 +230,13 @@ public:
     std::optional<Scheduled<Phase::TypedAst>> typed;
     if(moduleMode) {
       auto resolved=advance(std::move(checked),[&] {
+        base.errorPhase=1;
         dispatch(@"resolve_declarations",MaxFunctions,base);
         dispatch(@"resolve_names",cap,base);
         diagnose();
       });
       typed.emplace(advance(std::move(resolved),[&] {
+        base.errorPhase=2;
         dispatch(@"seed_types",cap,base);
         dispatch(@"check_types",cap,base);
         dispatch(@"check_returns",MaxFunctions,base);
@@ -226,6 +258,8 @@ public:
     check(errorCode || (moduleMode ? functionCount>0 && functionCount<=MaxFunctions : root<nodeCount),"AST root missing");
     NSMutableDictionary* result=[@{@"backend":@"metal",@"device":device.name,@"passes":names,
       @"dispatches":@(dispatches),@"hostWaits":@(hostWaits),@"chunkSize":@(chunk),
+      @"diagnostics":strategyName(diagnostics),@"diagnosticDispatches":@(diagnosticDispatches),
+      @"mslVersion":[NSString stringWithFormat:@"%u.%u",memory[l.control+CMetalVersion]/100,(memory[l.control+CMetalVersion]%100)/10],
       @"elapsedUs":@(elapsed(start,finished)),
       @"gpuUs":@((command.GPUEndTime-command.GPUStartTime)*1e6),
       @"arenaBytes":@(size_t(total)*4)} mutableCopy];
@@ -284,23 +318,40 @@ int main(int argc,const char** argv) {
       id language=request[@"language"];
       check(!language || [language isEqual:@"expression"] || [language isEqual:@"module"],"Invalid language mode");
       bool moduleMode=[language isEqual:@"module"];
+      id requested=request[@"diagnostics"];
+      NSArray* strategies=[requested isKindOfClass:[NSArray class]] ? requested : @[requested ?: @"packed"];
+      check(strategies.count>0 && strategies.count<=3,"Expected one to three diagnostic strategies");
+      check([NSSet setWithArray:strategies].count==strategies.count,"Diagnostic strategies must be distinct");
+      for(id value in strategies) parseStrategy(value);
       Runtime runtime(@(argv[1]));
       NSMutableArray* results=[NSMutableArray new];
       for(id source in sources) {
         check([source isKindOfClass:[NSString class]],"Source must be a string");
         NSMutableArray* samples=[NSMutableArray new];
         NSMutableArray* gpuSamples=[NSMutableArray new];
-        NSDictionary* last=nil;
+        NSMutableArray* last=[NSMutableArray new];
+        for(U32 i=0;i<strategies.count;i++) {
+          [samples addObject:[NSMutableArray new]]; [gpuSamples addObject:[NSMutableArray new]];
+          [last addObject:[NSNull null]];
+        }
         for(U32 run=0;run<repeat;run++) {
-          @autoreleasepool {
-            last=runtime.run(source,chunk,run+1==repeat,moduleMode);
-            [samples addObject:last[@"elapsedUs"]]; [gpuSamples addObject:last[@"gpuUs"]];
+          // Rotate order each round, comparing schedules with the same device,
+          // library and process rather than timing separate process lifetimes.
+          for(U32 slot=0;slot<strategies.count;slot++) {
+            U32 index=(slot+run)%U32(strategies.count);
+            @autoreleasepool {
+              NSDictionary* current=runtime.run(source,chunk,run+1==repeat,moduleMode,parseStrategy(strategies[index]));
+              last[index]=current;
+              [samples[index] addObject:current[@"elapsedUs"]]; [gpuSamples[index] addObject:current[@"gpuUs"]];
+            }
           }
         }
-        NSMutableDictionary* result=[last mutableCopy];
-        result[@"samplesUs"]=samples; result[@"gpuSamplesUs"]=gpuSamples;
-        result[@"setupUs"]=@(runtime.setupUs);
-        [results addObject:result];
+        for(U32 i=0;i<strategies.count;i++) {
+          NSMutableDictionary* result=[last[i] mutableCopy];
+          result[@"samplesUs"]=samples[i]; result[@"gpuSamplesUs"]=gpuSamples[i];
+          result[@"setupUs"]=@(runtime.setupUs);
+          [results addObject:result];
+        }
       }
       NSData* output=[NSJSONSerialization dataWithJSONObject:results options:0 error:&error];
       check(output!=nil,"Cannot serialize results");

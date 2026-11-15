@@ -17,5 +17,8 @@ module file: build
 bench: build
   pnpm bench
 
+bench-diagnostics: build
+  pnpm bench:diagnostics
+
 validate: build
   node scripts/validate-metal.mjs

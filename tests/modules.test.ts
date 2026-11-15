@@ -91,13 +91,15 @@ test('damaged declarations have deterministic diagnostics before semantic passes
     for(const inserted of ['@',';',')','{','fn '])
       sources.push(base.slice(0,token.begin)+inserted+base.slice(token.begin));
   }
-  const results=parseGpuModules(sources,7);
-  results.forEach((actual,i)=> {
-    const expected=parseModuleReference(sources[i]);
-    assert.deepEqual(actual.diagnostic,expected.diagnostic,sources[i]);
-    assert.deepEqual(actual.nodes,expected.nodes,sources[i]);
-    assert.deepEqual(actual.functions,expected.functions,sources[i]);
-  });
+  for(const diagnostics of ['tree','hierarchical','packed'] as const) {
+    const results=parseGpuModules(sources,7,1,{diagnostics});
+    results.forEach((actual,i)=> {
+      const expected=parseModuleReference(sources[i]);
+      assert.deepEqual(actual.diagnostic,expected.diagnostic,sources[i]);
+      assert.deepEqual(actual.nodes,expected.nodes,sources[i]);
+      assert.deepEqual(actual.functions,expected.functions,sources[i]);
+    });
+  }
 });
 
 test('function and parameter capacities are checked on the GPU',()=> {

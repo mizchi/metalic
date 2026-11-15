@@ -33,6 +33,17 @@ uint token_kind(uchar c) {
   }
 }
 void error(device uint* m, constant Params& p, uint at, uint code) {
+  if(p.diagnostics==DPacked) {
+    // Each phase has its own accumulator. Prior-phase validity is frozen in
+    // CErrorCode until publish, so all errors in the current phase participate.
+    device atomic_uint* key=reinterpret_cast<device atomic_uint*>(m+p.l.control+CGrammarKey+p.errorPhase);
+    uint candidate=(at<<DiagnosticCodeBits)|code;
+    // The accumulator only decreases. An observed smaller value safely avoids
+    // a contended read-modify-write, including storms of invalid characters.
+    if(candidate<atomic_load_explicit(key,memory_order_relaxed))
+      atomic_fetch_min_explicit(key,candidate,memory_order_relaxed);
+    return;
+  }
   // Independent functions can diagnose the same EOF byte concurrently.
   device atomic_uint* slot=reinterpret_cast<device atomic_uint*>(m+p.l.errors+at);
   uint old=atomic_load_explicit(slot,memory_order_relaxed);
@@ -284,4 +295,45 @@ kernel void error_publish(device const uchar* s [[buffer(0)]],
   uint at=m[p.l.tree+1];
   m[p.l.control+CErrorOffset]=at;
   m[p.l.control+CErrorCode]=at==NONE ? 0 : m[p.l.errors+at];
+  m[p.l.control+CMetalVersion]=__METAL_VERSION__;
+}
+
+// At most 256 groups, each consuming a strided slice. A second group reduction
+// handles their minima; this keeps global dispatch depth independent of N.
+kernel void error_reduce(device const uchar* s [[buffer(0)]], device uint* m [[buffer(1)]],
+  constant Params& p [[buffer(2)]], uint i [[thread_position_in_grid]],
+  uint t [[thread_index_in_threadgroup]], uint group [[threadgroup_position_in_grid]]) {
+  threadgroup uint values[256];
+  uint best=NONE;
+  for(uint j=i;j<p.size;j+=p.step) {
+    uint value=m[p.a+j];
+    uint key=p.c ? (value ? (j<<DiagnosticCodeBits)|value : NONE) : value;
+    best=min(best,key);
+  }
+  values[t]=best;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for(uint stride=128;stride;stride/=2) {
+    if(t<stride) values[t]=min(values[t],values[t+stride]);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if(t==0) m[p.b+group]=values[0];
+}
+void publish_key(device uint* m, constant Params& p, uint key) {
+  m[p.l.control+CErrorOffset]=key==NONE ? NONE : key>>DiagnosticCodeBits;
+  m[p.l.control+CErrorCode]=key==NONE ? 0 : key&((1u<<DiagnosticCodeBits)-1);
+  m[p.l.control+CMetalVersion]=__METAL_VERSION__;
+}
+kernel void error_publish_min(device const uchar* s [[buffer(0)]], device uint* m [[buffer(1)]],
+  constant Params& p [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  if(i==0) publish_key(m,p,m[p.a]);
+}
+kernel void error_publish_packed(device const uchar* s [[buffer(0)]], device uint* m [[buffer(1)]],
+  constant Params& p [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+  if(i) return;
+  uint key=NONE;
+  for(uint phase=0;phase<3;phase++) {
+    key=m[p.l.control+CGrammarKey+phase];
+    if(key!=NONE) break;
+  }
+  publish_key(m,p,key);
 }

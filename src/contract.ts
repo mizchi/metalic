@@ -9,6 +9,8 @@ export interface AstNode {
 }
 export interface ModuleNode extends AstNode { functionId: number; binding: number | null; type: TypeKind }
 export interface Diagnostic { code: ErrorCode; offset: number }
+export type DiagnosticStrategy = 'tree' | 'hierarchical' | 'packed';
+export interface GpuOptions { diagnostics?: DiagnosticStrategy }
 export const passes = ['Lex', 'Tokenize', 'Structure', 'NormalizeOperators', 'BuildAst', 'ValidateAst'] as const;
 export const modulePasses = [...passes, 'ResolveNames', 'CheckTypes'] as const;
 export interface Parameter { binding: number; begin: number; end: number; type: TypeKind }
@@ -24,6 +26,7 @@ export interface GpuResult extends ParseResult {
   dispatches: number; hostWaits: number; elapsedUs: number; gpuUs: number;
   chunkSize: number; setupUs: number; arenaBytes: number;
   samplesUs: number[]; gpuSamplesUs: number[];
+  diagnostics: DiagnosticStrategy; diagnosticDispatches: number; mslVersion: string;
 }
 export interface ModuleResult extends ParseResult { nodes: ModuleNode[]; functions: FunctionDecl[] }
 export interface GpuModuleResult extends GpuResult { nodes: ModuleNode[]; functions: FunctionDecl[] }

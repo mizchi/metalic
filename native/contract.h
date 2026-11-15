@@ -26,13 +26,16 @@ enum ErrorCode : U32 {
 };
 enum TypeKind : U32 { TypeU32 = 1, TypeStr = 2 };
 enum ModuleLimit : U32 { MaxFunctions = 256, MaxParameters = 64 };
+enum DiagnosticStrategy : U32 { DTree = 0, DHierarchical = 1, DPacked = 2 };
+enum RuntimeLimit : U32 { MaxSourceBytes = 1048576, DiagnosticCodeBits = 5 };
 enum LexState : U32 {
   SBase = 0, SName = 1, SNumber = 2, SSlash = 3, SLine = 4,
   SBlock = 5, SBlockStar = 6, SString = 7, SEscape = 8, SCount = 9
 };
 enum ControlIndex : U32 {
   CTokenCount = 0, CNodeCount = 1, CRoot = 2, CErrorOffset = 3,
-  CErrorCode = 4, CFunctionCount = 5, CCount = 6
+  CErrorCode = 4, CFunctionCount = 5, CGrammarKey = 6, CResolveKey = 7,
+  CTypeKey = 8, CMetalVersion = 9, CCount = 10
 };
 struct Layout {
   U32 starts, ends, ranks, tokKind, tokBegin, tokEnd, delta, depth;
@@ -46,5 +49,5 @@ struct Layout {
 };
 struct Params {
   Layout l;
-  U32 n, size, step, a, b, c, d, chunk, mode;
+  U32 n, size, step, a, b, c, d, chunk, mode, diagnostics, errorPhase;
 };

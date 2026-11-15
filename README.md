@@ -15,11 +15,12 @@ just parse examples/arithmetic.np
 just module examples/functions.np
 just validate
 just bench
+just bench-diagnostics
 ```
 
-必要環境は Apple Silicon の Metal GPU、Xcode Command Line Tools、Node.js 24+、pnpm、just。Apple M5 / macOS 26.6.2 で動作確認した。実行時依存の npm ライブラリはなく、TypeScript と Node の型定義は検査用の開発依存。
+必要環境は Apple Silicon の Metal GPU、macOS 26以降、対応 Xcode／Metal Toolchain、Node.js 24+、pnpm、just。MSL 4.0 を明示指定し、Apple M5 / macOS 26.6.2 で動作確認した。実行時依存の npm ライブラリはなく、TypeScript と Node の型定義は検査用の開発依存。
 
-この README と計測値は現行 v1 のもの。次の v2 は **MSL 4.1／macOS 27以降／macOS 27 SDK を含む Xcode 27以降**を基準とし、最新 MSL の機能を前提に設計する。v2 の言語バージョンは明示指定し、旧版への自動切り替えは行わない。[v2 設計案](<reports/Metal GPU 言語処理系 の 設計最適化.md>)を参照。
+**MSL 4.1 の採用と OS／Xcode の更新は後回しにし、当面は4.0で検証する。** 最新 MSL を使う将来の [v2 設計案](<reports/Metal GPU 言語処理系 の 設計最適化.md>)と、現在の [診断集約の比較検証](reports/診断集約の比較検証.md)を分けて記録する。4.1固有の機能が必要になる検証は、その時点で要件を確認する。
 
 ## 実装とリサーチ
 
@@ -38,8 +39,11 @@ just bench
 1. [Metal 向け コンパイラ と 実行基盤](<reports/Metal 向け コンパイラ と 実行基盤.md>) — Bend／Mojo、Metal の制約と同期、関連研究。
 2. [Metal 言語処理系 の ナノパス設計](<reports/Metal 言語処理系 の ナノパス設計.md>) — Chez／Harlan 等を参考にした段階契約。
 3. [Metal GPU 言語処理系 の 設計最適化](<reports/Metal GPU 言語処理系 の 設計最適化.md>) — 2024–2026年の研究、現行の費用、MSL 4.1 を基準にした v2。
+4. [診断集約の比較検証](reports/診断集約の比較検証.md) — MSL 4.0で3方式を実装・照合し、発行回数と処理時間を比較。
 
 `pnpm parse --cpu file.np` は独立した CPU oracle を明示的に使う。`--module --cpu` では関数モジュールの oracle を使う。GPU が使えない場合はエラーにし、暗黙の CPU fallback はしない。`--chunk-size 7` などで字句チャンクを変更できる。
+
+診断集約は `--diagnostics packed`（既定）、`hierarchical`、`tree` で切り替える。TS API では第4引数に `{diagnostics: 'tree'}` 等を渡せる。結果の `mslVersion` は shader が報告した言語バージョン、`diagnosticDispatches` は診断専用 dispatch の件数を表す。
 
 ## 現在の言語範囲
 
@@ -109,15 +113,15 @@ AST の NodeId は本体の括弧等を除いた token 順。node span はその
 
 ## 検証と計測
 
-`just test` は ABI 生成・ビルド、TypeScript strict 検査、16本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
+`just test` は ABI 生成・ビルド、TypeScript strict 検査、20本のテストを実行する。優先順位・左結合・右結合 prefix、2048個の prefix、深い括弧、長い識別子、文字列・コメント、64通りの alignment、4種類の chunk size、固定 seed の生成式、不正入力の挿入、80,001ノードでの3階層 group scan を照合する。モジュールは独立スコープ、型エラー、204通りの宣言破壊、関数・引数の上限、深さの異なる128関数の式木を確認する。CPU oracle は逐次 byte lexer＋反復 shunting-yard と逐次の宣言・型検査で、GPU の遷移関数 scan／Cartesian tree を再利用していない。
 
-`just validate` は Metal API/GPU validation を有効にして式4件・モジュール10件の正常系・深い木・複数 threadgroup・異常系を確認する。通常の速度測定とは別に実行する。
+`just validate` は Metal API/GPU validation を有効にして式4件・モジュール12件を3方式で実行し、計48件の正常系・深い木・複数 threadgroup・異常系を確認する。通常の速度測定とは別に実行する。
 
 `just bench` は3回の warmup 後20回を測り、`build/benchmark.json` に保存する。GPU frontend 時間は確保・初期化・encode/submit・最後の wait を含み、最終 JSON 化は含まない。device interval、library/pipeline setup、プロセス起動・23回の実行と最終 AST の転送を含む batch wall time も分ける。OS の Metal cache は無効化していない。CPU は TypeScript の正しさ確認用 oracle であり、最適化された CPU parser との速度比較ではない。p95 も20標本の参考値。自動 CPU/GPU 選択はまだ実装しない。
 
-再現用の計測 snapshot とソース SHA-256 は [`measurements/apple-m5.json`](measurements/apple-m5.json) に保存する。現段階では容量上界への dispatch と複数の global scan/reduction が大きな費用で、次は count を使う indirect dispatch、scan/診断 reduction の削減、同じ SoA を使う native CPU baseline を比較する。
+初回の tree 方式の計測 snapshot とソース SHA-256 は [`measurements/apple-m5.json`](measurements/apple-m5.json) に保存している。診断の改善を比較する `just bench-diagnostics` は、各ケースにつき同一プロセスで3方式の順序を回転し、3 warmup＋30標本＋表示用の最終1回を実行して `build/diagnostics-benchmark.json` に保存する。[試行1](measurements/apple-m5-diagnostics-trial1.json)・[試行2](measurements/apple-m5-diagnostics-trial2.json)は別の保存記録。現段階では容量上界への dispatch と毎回の確保・初期化が残り、次は arena 再利用、count を使う indirect dispatch、同じ契約の native CPU baseline を比較する。
 
-Apple M5 での今回のモジュール計測（各関数に32項の式、中央値）：
+Apple M5 での初回 tree 方式のモジュール計測（各関数に32項の式、中央値。現在の比較は上記の試行1・2を参照）：
 
 | 関数数 | 入力 bytes | AST ノード数 | GPU frontend | GPU device interval |
 |---|---:|---:|---:|---:|
