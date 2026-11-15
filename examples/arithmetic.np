@@ -1,0 +1,4 @@
+/* GPU frontend prototype: these are parsed expressions, not evaluated code. */
+-(-alpha + 42) * (beta - 7) / 3;
+"hello \"Metal\"";
+alpha - beta - gamma;

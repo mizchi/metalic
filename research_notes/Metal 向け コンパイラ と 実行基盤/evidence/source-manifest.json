@@ -1,0 +1,65 @@
+{
+  "retrieved_as_of": "2026-11-15",
+  "bend_head": "f0cf0a7c573145501981c44d9c33e326185f008e",
+  "sources": [
+    {
+      "url": "https://developer.apple.com/documentation/metal/understanding-the-metal-4-core-api.md",
+      "sha256": "767cef229f044028e5cd13f1f574aadea04b38481bc7d2bf91f627f84bb486a1",
+      "bytes": 22565
+    },
+    {
+      "url": "https://developer.apple.com/documentation/metal/resource-synchronization.md",
+      "sha256": "70d169f47833d59b7559d8c37be5716ff4669395f8632a73d32a62e7efc772a6",
+      "bytes": 15389
+    },
+    {
+      "url": "https://developer.apple.com/documentation/metal/choosing-a-resource-storage-mode-for-apple-gpus.md",
+      "sha256": "ebbae06c457765a6d8725ea46d2d7efa61b0a916d19d8bcc20b4d7b841388b3f",
+      "bytes": 5039
+    },
+    {
+      "url": "https://developer.apple.com/documentation/metal/synchronizing-events-between-a-gpu-and-the-cpu.md",
+      "sha256": "f639c471d402eb9696b5e3beb0d0ac56134c151a01a7bfcc7aba873c014e56c0",
+      "bytes": 4495
+    },
+    {
+      "url": "https://developer.apple.com/documentation/metal/synchronizing-events-within-a-single-device.md",
+      "sha256": "26e39c1729cd137ec25493c74f5ee335eb50517ed78ce456b06b412588e2b15e",
+      "bytes": 2935
+    },
+    {
+      "url": "https://developer.apple.com/documentation/metal/mtl4commandallocator/reset().md",
+      "sha256": "b4e0ecf18ee6c4215cf789fa960120143121e49e42b6f23b6b5eda9b3ae1c3f0",
+      "bytes": 1168
+    },
+    {
+      "url": "https://developer.apple.com/documentation/metal/mtlindirectcomputecommand.md",
+      "sha256": "0af9ea5ecad924860de44a63b0b4d7f9bd8215445dd38de864decba60b894a75",
+      "bytes": 3826
+    },
+    {
+      "url": "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf",
+      "sha256": "41538b30d2f1140a5b2a0c84ce0a9f7b67bf0c707e224cfea0bfe5a44aa26cf5",
+      "bytes": 14564497,
+      "document_date": "2026-06-04",
+      "relevant_sections": [
+        "1.5.4 p13 recursion; allocation restrictions",
+        "4.8 p122-123 memory coherence",
+        "5.2.1 p157 SIMD group forward progress",
+        "6.16 p298-302 memory order/fence scope",
+        "6.17 indirect command buffers"
+      ]
+    },
+    {
+      "url": "https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf",
+      "sha256": "9480a8c27a94e9b5b3d164fe6b96f1739fef8730da8c4b6003d1e7fa826e5fce",
+      "bytes": 3099823,
+      "document_date": "2026-10-23",
+      "relevant_sections": [
+        "p5 Metal 4 feature availability"
+      ]
+    }
+  ],
+  "raw_downloads_included": false,
+  "retrieval_note": "Temporary source downloads are not included. Retrieve the source URLs and verify their recorded SHA-256 values."
+}

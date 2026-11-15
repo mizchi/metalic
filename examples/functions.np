@@ -1,0 +1,5 @@
+// Each function body is parsed, resolved and type-checked on the GPU.
+fn add(x: u32, y: u32): u32 { x + y }
+fn arithmetic(x: u32, y: u32): u32 { -(x + 1) * y + 42 }
+fn identity(text: str): str { text }
+fn greeting(): str { "こんにちは" }
